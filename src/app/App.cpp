@@ -30,23 +30,54 @@ void App::tick(const InputState& in, float dtSeconds) {
     // tunnel
     renderer.buildTunnel(dl, w, h, 14);
 
-    // ship trail (screen-space vertical line in center as placeholder)
-    // (later: actual projected ship + proper trail segments)
+    // Ship trail as 3D polyline in view space (cyan fading to black)
+    const fx zNear = fx::fromInt(8);
+    const fx zStep = fx::fromInt(3);
+
+    auto rgb565 = [](uint8_t r, uint8_t g, uint8_t b) -> uint16_t {
+        return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+    };
+
+    // Cyan = (0, level, level). Keep hue constant; fade intensity.
+    auto cyan565 = [&](uint8_t level) -> uint16_t {
+        return rgb565(0, level, level);
+    };
+
     auto& tr = game.trail();
     int head = game.trailHead();
-    int cx = w/2;
 
-    for (int i = 0; i < Game::TRAIL-1; ++i) {
-        int a = (head - i + Game::TRAIL) % Game::TRAIL;
-        int b = (head - i - 1 + Game::TRAIL) % Game::TRAIL;
+    Vec2i prev{};
+    bool prevOk = false;
 
-        int y0 = (h/2) + tr[a].toInt();
-        int y1 = (h/2) + tr[b].toInt();
+    for (int i = 0; i < Game::TRAIL; ++i) {
+        int idx = (head - i + Game::TRAIL) % Game::TRAIL;
 
-        // fade by skipping older segments (cheap)
-        if (i % 2 == 1) continue;
+        Vec3fx p3;
+        p3.x = fx::fromInt(0);
+        p3.y = tr[idx];
+        p3.z = zNear + mulInt(zStep, i);
 
-        dl.addLine((int16_t)cx,(int16_t)y0,(int16_t)cx,(int16_t)y1, 0x07FF);
+        Vec2i p2;
+        bool ok = projectPoint(renderer.camera(), p3, p2);
+        if (!ok) { prevOk = false; continue; }
+
+        if (prevOk) {
+            // Skip pattern for cheap fade + performance
+            if (i < 12 || (i < 24 && (i & 1) == 0) || (i & 3) == 0) {
+
+                // Intensity ramp (newest brightest)
+                uint8_t level;
+                if (i < 8)       level = 255;
+                else if (i < 16) level = 180;
+                else if (i < 28) level = 120;
+                else             level = 70;
+
+                dl.addLine(prev.x, prev.y, p2.x, p2.y, cyan565(level));
+            }
+        }
+
+        prev = p2;
+        prevOk = true;
     }
 }
 

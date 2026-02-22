@@ -3,7 +3,7 @@
 cmake_minimum_required(VERSION 3.13)
 
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Initialise pico_sdk from installed location
@@ -42,6 +42,7 @@ add_executable(GeometryVibes3D-PicoCalc
     src/render/Project.cpp
     src/render/DrawList.cpp
     src/render/Renderer.cpp
+    src/platform/pico/Ili9488Display.cpp
     src/platform/pico/PicoPlatform.cpp
 )
 
@@ -54,11 +55,15 @@ pico_enable_stdio_usb(GeometryVibes3D-PicoCalc 1)
 
 # Add the standard library to the build
 target_link_libraries(GeometryVibes3D-PicoCalc
-        pico_stdlib)
+    pico_stdlib
+    hardware_spi
+    hardware_gpio
+    hardware_dma
+)
 
 # Add the standard include files to the build
 target_include_directories(GeometryVibes3D-PicoCalc PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}
+    ${CMAKE_CURRENT_LIST_DIR}/src
 )
 
 pico_add_extra_outputs(GeometryVibes3D-PicoCalc)

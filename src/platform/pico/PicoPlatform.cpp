@@ -1,6 +1,6 @@
 #include "../Platform.hpp"
-#include "PicoDisplayStub.hpp"
-#include "pico/stdlib.hpp"
+#include "Ili9488Display.hpp"
+#include "pico/stdlib.h"
 
 namespace gv {
 
@@ -30,7 +30,7 @@ public:
     IDisplay& display() override { return disp; }
 
 private:
-    PicoDisplayStub disp;
+    Ili9488Display disp;
     uint64_t last{};
 };
 

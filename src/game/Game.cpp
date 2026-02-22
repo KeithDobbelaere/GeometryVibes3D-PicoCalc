@@ -12,7 +12,7 @@ void Game::reset() {
 void Game::update(const InputState& in, fx dt) {
     // Geometry-wave style: direction flips based on input
     fx speed = fx::fromInt(80);
-    shipState.vy = in.thrust ? speed : fx{ -speed.raw(), true };
+    shipState.vy = in.thrust ? speed : -speed;
 
     shipState.y = shipState.y + shipState.vy * dt;
 
