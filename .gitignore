@@ -1,0 +1,19 @@
+# Build output
+build/
+out/
+cmake-build-*/
+
+# VSCode local state
+.vscode/*.log
+.vscode/ipch/
+.vscode/.cortex-debug.*
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
