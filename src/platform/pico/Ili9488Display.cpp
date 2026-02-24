@@ -1,61 +1,108 @@
 #include "Ili9488Display.hpp"
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
 #include "hardware/spi.h"
 #include "hardware/gpio.h"
 #include "hardware/dma.h"
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
+#include <cstdlib>
 
 namespace gv {
 
 static uint g_baud = 0;
-static int g_dma_tx = -1;
+static int  g_dma_tx = -1;
 static dma_channel_config g_dma_cfg;
 
-Ili9488Display::Ili9488Display() {
-    dirtyPrev.clear();
-    dirtyNow.clear();
-    dirtyUnion.clear();
-}
+// FIFO tags: top 16 bits tag, low 16 bits slot
+static constexpr uint32_t TAG_FRAME = 0xF00D0000;
+static constexpr uint32_t TAG_DONE  = 0xD00E0000;
 
-Ili9488Display::~Ili9488Display() {
-    if (scratch) std::free(scratch);
+// Ping-pong slab buffers (big-endian RGB565 words)
+static uint16_t s_slabBuf[2][Ili9488Display::W * Ili9488Display::SLAB_ROWS];
+
+// ---- statics ----
+Ili9488Display::Frame Ili9488Display::s_frame[2];
+volatile bool Ili9488Display::s_slotReady[2] = {false, false};
+volatile int  Ili9488Display::s_prod = 0;
+Ili9488Display* Ili9488Display::s_active = nullptr;
+
+Ili9488Display::Ili9488Display() {}
+Ili9488Display::~Ili9488Display() {}
+
+static inline void start_dma_slab(const void* src, int pixelWords) {
+    // DMA sends uint16_t words directly into SPI DR (count is words)
+    dma_channel_configure(
+        g_dma_tx,
+        &g_dma_cfg,
+        &spi_get_hw(spi1)->dr,
+        src,
+        pixelWords,
+        true
+    );
 }
 
 void Ili9488Display::beginFrame() {
     initIfNeeded();
-    dirtyNow.clear();
+
+    // Drain any DONE messages to keep FIFO tidy (non-blocking)
+    while (multicore_fifo_rvalid()) {
+        (void)multicore_fifo_pop_blocking();
+    }
 }
 
 void Ili9488Display::drawLines(const DrawList& dl) {
     initIfNeeded();
 
-    for (const auto& ln : dl.get())
-        dirtyNow.addLine(ln.x0, ln.y0, ln.x1, ln.y1);
+    Frame& f = s_frame[(int)s_prod];
+    f.lineCount = 0;
 
-    dirtyUnion = DirtyRect::unite(dirtyPrev, dirtyNow);
-    dirtyUnion = clampToScreen(dirtyUnion);
+    // Clip once to screen space here (core0)
+    // This reduces slab span and reduces core1 work.
+    for (const auto& ln : dl.get()) {
+        if (f.lineCount >= MAX_LINES) break;
 
-    if (dirtyUnion.empty()) return;
+        int x0 = ln.x0, y0 = ln.y0;
+        int x1 = ln.x1, y1 = ln.y1;
 
-    const int w = dirtyUnion.x1 - dirtyUnion.x0 + 1;
-    const int h = dirtyUnion.y1 - dirtyUnion.y0 + 1;
+        if (!clipLineToRect(x0, y0, x1, y1, 0, 0, W - 1, H - 1))
+            continue;
 
-    ensureScratch(w, h);
-    clearScratchToBlack();
+        Line& out = f.lines[f.lineCount++];
+        out.x0 = (int16_t)x0;
+        out.y0 = (int16_t)y0;
+        out.x1 = (int16_t)x1;
+        out.y1 = (int16_t)y1;
+        out.c565 = ln.color565;
+    }
 
-    for (const auto& ln : dl.get())
-        drawLine565(ln.x0, ln.y0, ln.x1, ln.y1, ln.color565, dirtyUnion);
+    binFrameLines(f);
+
+    lastLines  = f.lineCount;
+    lastBinned = f.binnedTotal;
 }
 
 void Ili9488Display::endFrame() {
     if (!inited) return;
 
-    if (!dirtyUnion.empty())
-        flushScratch(dirtyUnion);
+    const int slot = (int)s_prod;
 
-    // FPS logging
+    // Mark ready and signal core1 which slot to consume.
+    s_slotReady[slot] = true;
+    multicore_fifo_push_blocking(TAG_FRAME | (uint32_t)slot);
+
+    // Advance producer slot (pipeline)
+    s_prod ^= 1;
+
+    // No dropped frames: if next prod slot is still busy, wait until it’s freed.
+    while (s_slotReady[(int)s_prod]) {
+        uint32_t msg = multicore_fifo_pop_blocking();
+        if ((msg & 0xFFFF0000u) == TAG_DONE) {
+            // core1 clears s_slotReady[slot] itself; nothing else needed.
+        }
+    }
+
+    // FPS logging (core0)
     static uint32_t frames = 0;
     static uint64_t t0 = 0;
     if (t0 == 0) t0 = time_us_64();
@@ -63,19 +110,23 @@ void Ili9488Display::endFrame() {
 
     uint64_t now = time_us_64();
     if (now - t0 >= 1000000) {
-        printf("SPI:%u FPS:%u Dirty:%dx%d\n",
-               g_baud, frames, scratchW, scratchH);
+        printf("SPI:%u FPS:%u Lines:%d Binned:%d\n",
+               g_baud, frames, lastLines, lastBinned);
         frames = 0;
         t0 = now;
     }
-
-    dirtyPrev = dirtyNow;
 }
 
 void Ili9488Display::initIfNeeded() {
     if (inited) return;
 
     g_baud = spi_init(spi1, SPI_BAUD_HZ);
+
+    // IMPORTANT:
+    // Keep SPI in 8-bit mode for command/parameter writes (writeCmd/writeData).
+    // We'll temporarily switch to 16-bit mode ONLY while streaming pixel data.
+
+    spi_set_format(spi1, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
 
     gpio_set_function(PIN_SCK,  GPIO_FUNC_SPI);
     gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
@@ -87,23 +138,23 @@ void Ili9488Display::initIfNeeded() {
     lcdReset();
     lcdInit();
 
-    // Claim a DMA channel for SPI1 TX
+    // DMA for SPI1 TX
     g_dma_tx = dma_claim_unused_channel(true);
     g_dma_cfg = dma_channel_get_default_config(g_dma_tx);
 
-    // 16-bit transfers (we're sending swapped RGB565 words as uint8_t)
-    channel_config_set_transfer_data_size(&g_dma_cfg, DMA_SIZE_8);
+    channel_config_set_transfer_data_size(&g_dma_cfg, DMA_SIZE_16);
     channel_config_set_read_increment(&g_dma_cfg, true);
     channel_config_set_write_increment(&g_dma_cfg, false);
-
-    // Pace DMA using SPI1 TX DREQ
     channel_config_set_dreq(&g_dma_cfg, spi_get_dreq(spi1, true));
 
-    // Clear screen once
-    DirtyRect full{0,0,W-1,H-1};
-    ensureScratch(W,H);
-    clearScratchToBlack();
-    flushScratch(full);
+    s_active = this;
+
+    // Clear state
+    s_slotReady[0] = false;
+    s_slotReady[1] = false;
+    s_prod = 0;
+
+    multicore_launch_core1(core1_entry);
 
     inited = true;
 }
@@ -144,90 +195,166 @@ void Ili9488Display::lcdInit() {
     writeCmd(0x21); // INVON
 
     writeCmd(0x3A);
-    writeDataByte(0x55); // 16-bit (RGB565)
+    writeDataByte(0x55); // RGB565
 
     writeCmd(0x36);
-    writeDataByte(0x48); // your working MADCTL
+    writeDataByte(0x40); // working MADCTL
 
     writeCmd(0x29);
 }
 
 void Ili9488Display::setAddrWindow(int x0, int y0, int x1, int y1) {
-    // Column address set (0x2A)
     writeCmd(0x2A);
     uint8_t col[4] = {
-        (uint8_t)(x0 >> 8), (uint8_t)(x0 & 0xFF),
-        (uint8_t)(x1 >> 8), (uint8_t)(x1 & 0xFF),
+        uint8_t(x0 >> 8), uint8_t(x0 & 0xFF),
+        uint8_t(x1 >> 8), uint8_t(x1 & 0xFF)
     };
     writeData(col, 4);
 
-    // Page address set (0x2B)
     writeCmd(0x2B);
     uint8_t row[4] = {
-        (uint8_t)(y0 >> 8), (uint8_t)(y0 & 0xFF),
-        (uint8_t)(y1 >> 8), (uint8_t)(y1 & 0xFF),
+        uint8_t(y0 >> 8), uint8_t(y0 & 0xFF),
+        uint8_t(y1 >> 8), uint8_t(y1 & 0xFF)
     };
     writeData(row, 4);
 
-    // Memory write (0x2C)
     writeCmd(0x2C);
 }
 
-DirtyRect Ili9488Display::clampToScreen(const DirtyRect& r) {
-    DirtyRect c = r;
-    if (c.empty()) return c;
-
-    if (c.x0 < 0) c.x0 = 0;
-    if (c.y0 < 0) c.y0 = 0;
-    if (c.x1 >= W) c.x1 = W - 1;
-    if (c.y1 >= H) c.y1 = H - 1;
-
+// ---- Cohen–Sutherland clipping (int math, safe-ish) ----
+static inline int outcode(int x, int y, int xmin, int ymin, int xmax, int ymax) {
+    int c = 0;
+    if (x < xmin) c |= 1; else if (x > xmax) c |= 2;
+    if (y < ymin) c |= 4; else if (y > ymax) c |= 8;
     return c;
 }
 
-void Ili9488Display::ensureScratch(int w, int h) {
-    if (w == scratchW && h == scratchH && scratch) return;
-
-    size_t pixels = (size_t)w * (size_t)h;
-    uint16_t* p = (uint16_t*)std::realloc(scratch, pixels * 2);
-    if (!p) {
-        printf("OOM scratch %dx%d\n", w, h);
-        return;
-    }
-
-    scratch = p;
-    scratchW = w;
-    scratchH = h;
-    scratchPixels = pixels;
-}
-
-void Ili9488Display::clearScratchToBlack() {
-    if (scratch)
-        std::memset(scratch, 0, scratchPixels * 2);
-}
-
-void Ili9488Display::plot565(int x, int y, uint16_t color,
-                             const DirtyRect& clip) {
-    if (x < clip.x0 || x > clip.x1 ||
-        y < clip.y0 || y > clip.y1) return;
-
-    int sx = x - clip.x0;
-    int sy = y - clip.y0;
-
-    if ((unsigned)sx >= (unsigned)scratchW ||
-        (unsigned)sy >= (unsigned)scratchH) return;
-
-    scratch[sy * scratchW + sx] = color;
-}
-
-void Ili9488Display::drawLine565(int x0, int y0, int x1, int y1,
-                                 uint16_t color, const DirtyRect& clip) {
-    int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
-    int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
-    int err = dx + dy;
+bool Ili9488Display::clipLineToRect(int& x0, int& y0, int& x1, int& y1,
+                                   int xmin, int ymin, int xmax, int ymax)
+{
+    int c0 = outcode(x0, y0, xmin, ymin, xmax, ymax);
+    int c1 = outcode(x1, y1, xmin, ymin, xmax, ymax);
 
     while (true) {
-        plot565(x0, y0, color, clip);
+        if (!(c0 | c1)) return true;
+        if (c0 & c1) return false;
+
+        int cx = c0 ? c0 : c1;
+        int x = 0, y = 0;
+
+        const int dx = x1 - x0;
+        const int dy = y1 - y0;
+
+        if (cx & 8) { // y > ymax
+            if (dy == 0) return false;
+            y = ymax;
+            x = x0 + (int)((int64_t)dx * (ymax - y0) / dy);
+        } else if (cx & 4) { // y < ymin
+            if (dy == 0) return false;
+            y = ymin;
+            x = x0 + (int)((int64_t)dx * (ymin - y0) / dy);
+        } else if (cx & 2) { // x > xmax
+            if (dx == 0) return false;
+            x = xmax;
+            y = y0 + (int)((int64_t)dy * (xmax - x0) / dx);
+        } else { // x < xmin
+            if (dx == 0) return false;
+            x = xmin;
+            y = y0 + (int)((int64_t)dy * (xmin - x0) / dx);
+        }
+
+        if (cx == c0) { x0 = x; y0 = y; c0 = outcode(x0, y0, xmin, ymin, xmax, ymax); }
+        else          { x1 = x; y1 = y; c1 = outcode(x1, y1, xmin, ymin, xmax, ymax); }
+    }
+}
+
+// ---- binning (core0) ----
+void Ili9488Display::binFrameLines(Frame& f) {
+    std::memset(f.slabCount, 0, sizeof(f.slabCount));
+    f.binnedTotal = 0;
+
+    const int n = f.lineCount;
+
+    // pass 1: count
+    for (int i = 0; i < n; ++i) {
+        int y0 = f.lines[i].y0;
+        int y1 = f.lines[i].y1;
+        if (y0 > y1) { int t = y0; y0 = y1; y1 = t; }
+
+        // Already screen-clipped, but keep safe:
+        if (y1 < 0 || y0 >= H) continue;
+        if (y0 < 0) y0 = 0;
+        if (y1 >= H) y1 = H - 1;
+
+        int s0 = y0 / SLAB_ROWS;
+        int s1 = y1 / SLAB_ROWS;
+
+        for (int s = s0; s <= s1; ++s) {
+            if (f.slabCount[s] != 0xFFFF) f.slabCount[s]++;
+        }
+    }
+
+    // prefix offsets
+    f.slabOffset[0] = 0;
+    for (int s = 0; s < NUM_SLABS; ++s) {
+        int next = (int)f.slabOffset[s] + (int)f.slabCount[s];
+        if (next > MAX_BINNED_ENTRIES) next = MAX_BINNED_ENTRIES;
+        f.slabOffset[s + 1] = (uint16_t)next;
+    }
+    f.binnedTotal = f.slabOffset[NUM_SLABS];
+
+    // cursors
+    for (int s = 0; s < NUM_SLABS; ++s)
+        f.slabCursor[s] = f.slabOffset[s];
+
+    // pass 2: fill
+    for (int i = 0; i < n; ++i) {
+        int y0 = f.lines[i].y0;
+        int y1 = f.lines[i].y1;
+        if (y0 > y1) { int t = y0; y0 = y1; y1 = t; }
+
+        if (y1 < 0 || y0 >= H) continue;
+        if (y0 < 0) y0 = 0;
+        if (y1 >= H) y1 = H - 1;
+
+        int s0 = y0 / SLAB_ROWS;
+        int s1 = y1 / SLAB_ROWS;
+
+        for (int s = s0; s <= s1; ++s) {
+            uint16_t idx = f.slabCursor[s];
+            if (idx < f.slabOffset[s + 1] && idx < MAX_BINNED_ENTRIES) {
+                f.slabIndices[idx] = (uint16_t)i;
+                f.slabCursor[s] = (uint16_t)(idx + 1);
+            }
+        }
+    }
+}
+
+// ---- slab raster (core1) ----
+inline void Ili9488Display::plotSlab(uint16_t* slab, int x, int yLocal, uint16_t c_swapped) {
+    if ((unsigned)x >= (unsigned)W) return;
+    if ((unsigned)yLocal >= (unsigned)SLAB_ROWS) return;
+    slab[yLocal * W + x] = c_swapped;
+}
+
+void Ili9488Display::drawLineIntoSlab(uint16_t* slab, int slabY0, int slabY1, const Line& ln) {
+    int x0 = ln.x0, y0 = ln.y0;
+    int x1 = ln.x1, y1 = ln.y1;
+
+    // Clip to slab rectangle before Bresenham
+    if (!clipLineToRect(x0, y0, x1, y1, 0, slabY0, W - 1, slabY1))
+        return;
+
+    int dx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
+    int sx = (x0 < x1) ? 1 : -1;
+    int dy = (y1 > y0) ? (y0 - y1) : (y1 - y0); // negative
+    int sy = (y0 < y1) ? 1 : -1;
+    int err = dx + dy;
+
+    const uint16_t c_sw = swap565(ln.c565);
+
+    while (true) {
+        plotSlab(slab, x0, y0 - slabY0, c_sw);
         if (x0 == x1 && y0 == y1) break;
         int e2 = err << 1;
         if (e2 >= dy) { err += dy; x0 += sx; }
@@ -235,94 +362,107 @@ void Ili9488Display::drawLine565(int x0, int y0, int x1, int y1,
     }
 }
 
-void Ili9488Display::flushScratch(const DirtyRect& r) {
-    if (!scratch) return;
-
-    const int x0 = r.x0, y0 = r.y0;
-    const int x1 = r.x1, y1 = r.y1;
-
-    const int w = x1 - x0 + 1;
-    const int h = y1 - y0 + 1;
-
-    setAddrWindow(x0, y0, x1, y1);
+// ---- core1: render+flush consumer frame ----
+void Ili9488Display::renderAndFlushFrame(const Frame& f) {
+    setAddrWindow(0, 0, W - 1, H - 1);
 
     gpio_put(PIN_DC, 1);
     gpio_put(PIN_CS, 0);
 
-    constexpr int SLAB_ROWS = 16; // tune later (16 is fine to start)
-    static uint16_t slab16[2][W * SLAB_ROWS]; // ping-pong, stores swapped words
+    // Switch to 16-bit frames for pixel streaming only.
+    // (Commands already sent in 8-bit mode via setAddrWindow/writeCmd/writeData)
+    spi_set_format(spi1, 16, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
 
-    auto pack_rows = [&](uint16_t* dstWords, int yStart, int rows) {
-        uint16_t* dstRow = dstWords;
-        for (int ry = 0; ry < rows; ++ry) {
-            const uint16_t* src = scratch + (size_t)(yStart + ry) * (size_t)w;
+    int ping = 0;
 
-            int i = 0;
-            for (; i + 1 < w; i += 2) {
-                uint32_t p = *(const uint32_t*)(src + i);
-                uint16_t c0 = (uint16_t)(p & 0xFFFF);
-                uint16_t c1 = (uint16_t)(p >> 16);
-                dstRow[i + 0] = (uint16_t)((c0 << 8) | (c0 >> 8));
-                dstRow[i + 1] = (uint16_t)((c1 << 8) | (c1 >> 8));
-            }
-            if (i < w) {
-                uint16_t c = src[i];
-                dstRow[i] = (uint16_t)((c << 8) | (c >> 8));
-            }
+    // Render first slab and start DMA
+    {
+        const int slabIndex = 0;
+        const int slabY0 = 0;
+        int slabY1 = slabY0 + SLAB_ROWS - 1;
+        if (slabY1 >= H) slabY1 = H - 1;
+        const int rows = slabY1 - slabY0 + 1;
 
-            dstRow += w;
+        uint16_t* slab = s_slabBuf[ping];
+        std::memset(slab, 0, W * rows * sizeof(uint16_t));
+
+        uint16_t a = f.slabOffset[slabIndex];
+        uint16_t b = f.slabCursor[slabIndex];
+        for (uint16_t k = a; k < b; ++k) {
+            const Line& ln = f.lines[f.slabIndices[k]];
+            drawLineIntoSlab(slab, slabY0, slabY1, ln);
         }
-    };
 
-    auto start_dma_bytes = [&](const void* srcBytes, int countBytes) {
-        dma_channel_configure(
-            g_dma_tx,
-            &g_dma_cfg,
-            &spi_get_hw(spi1)->dr,
-            srcBytes,
-            countBytes,
-            true
-        );
-    };
+        start_dma_slab(slab, W * rows);
+        ping ^= 1;
+    }
 
-    // Prime: pack first slab and start DMA immediately
-    int y = 0;
-    int rows0 = (h >= SLAB_ROWS) ? SLAB_ROWS : h;
-    pack_rows(slab16[0], 0, rows0);
+    for (int slabIndex = 1; slabIndex < NUM_SLABS; ++slabIndex) {
+        const int slabY0 = slabIndex * SLAB_ROWS;
+        int slabY1 = slabY0 + SLAB_ROWS - 1;
+        if (slabY1 >= H) slabY1 = H - 1;
+        const int rows = slabY1 - slabY0 + 1;
 
-    start_dma_bytes(reinterpret_cast<const uint8_t*>(slab16[0]), w * rows0 * 2);
+        uint16_t* slab = s_slabBuf[ping];
+        std::memset(slab, 0, W * rows * sizeof(uint16_t));
 
-    int ping = 1;
-    y += rows0;
+        // Render while previous DMA is running
+        uint16_t a = f.slabOffset[slabIndex];
+        uint16_t b = f.slabCursor[slabIndex];
+        for (uint16_t k = a; k < b; ++k) {
+            const Line& ln = f.lines[f.slabIndices[k]];
+            drawLineIntoSlab(slab, slabY0, slabY1, ln);
+        }
 
-    while (y < h) {
-        int rows = (y + SLAB_ROWS <= h) ? SLAB_ROWS : (h - y);
-
-        // While DMA is sending previous slab, pack next slab
-        pack_rows(slab16[ping], y, rows);
-
-        // Now wait for DMA to finish before reusing channel / ensuring SPI is ready
+        // Wait previous slab DMA, then ensure SPI idle
         dma_channel_wait_for_finish_blocking(g_dma_tx);
-
-        // IMPORTANT: ensure shifter finished last bytes before continuing
         while (spi_get_hw(spi1)->sr & SPI_SSPSR_BSY_BITS) {
             tight_loop_contents();
         }
 
-        // Start DMA for the slab we just packed
-        start_dma_bytes(reinterpret_cast<const uint8_t*>(slab16[ping]), w * rows * 2);
-
+        start_dma_slab(slab, W * rows);
         ping ^= 1;
-        y += rows;
     }
 
-    // Wait for final DMA to complete and SPI to go idle before CS high
     dma_channel_wait_for_finish_blocking(g_dma_tx);
     while (spi_get_hw(spi1)->sr & SPI_SSPSR_BSY_BITS) {
         tight_loop_contents();
     }
 
+    // Switch back to 8-bit so future command/param writes are correct.
+    spi_set_format(spi1, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
+
     gpio_put(PIN_CS, 1);
+}
+
+void Ili9488Display::core1_entry() {
+    while (true) {
+        const uint32_t msg = multicore_fifo_pop_blocking();
+        if ((msg & 0xFFFF0000u) != TAG_FRAME) continue;
+
+        const int slot = (int)(msg & 0xFFFFu);
+
+        Ili9488Display* d = s_active;
+        if (!d) {
+            multicore_fifo_push_blocking(TAG_DONE | (uint32_t)slot);
+            continue;
+        }
+
+        // Wait until core0 marks it ready (should already be true)
+        if (slot < 0 || slot > 1 || !s_slotReady[slot]) {
+            multicore_fifo_push_blocking(TAG_DONE | (uint32_t)slot);
+            continue;
+        }
+
+        const Frame& f = s_frame[slot];
+        d->renderAndFlushFrame(f);
+
+        // Release slot
+        s_slotReady[slot] = false;
+
+        // Notify core0
+        multicore_fifo_push_blocking(TAG_DONE | (uint32_t)slot);
+    }
 }
 
 } // namespace gv

@@ -56,6 +56,7 @@ pico_enable_stdio_usb(GeometryVibes3D-PicoCalc 1)
 # Add the standard library to the build
 target_link_libraries(GeometryVibes3D-PicoCalc
     pico_stdlib
+    pico_multicore
     hardware_spi
     hardware_gpio
     hardware_dma
