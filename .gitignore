@@ -17,3 +17,7 @@ CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 Makefile
+
+# Python virtualenvs (tools)
+tools/.venv/
+tools/venv/
