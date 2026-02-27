@@ -4,6 +4,7 @@
 #include "hardware/spi.h"
 #include "hardware/gpio.h"
 #include "hardware/dma.h"
+#include "hardware/sync.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -18,7 +19,7 @@ static dma_channel_config g_dma_cfg;
 static constexpr uint32_t TAG_FRAME = 0xF00D0000;
 static constexpr uint32_t TAG_DONE  = 0xD00E0000;
 
-// Ping-pong slab buffers (big-endian RGB565 words)
+// Ping-pong slab buffers (16-bit MSB-first)
 static uint16_t s_slabBuf[2][Ili9488Display::W * Ili9488Display::SLAB_ROWS];
 
 // ---- statics ----
@@ -88,7 +89,9 @@ void Ili9488Display::endFrame() {
     const int slot = (int)s_prod;
 
     // Mark ready and signal core1 which slot to consume.
+    __dmb();
     s_slotReady[slot] = true;
+    __dmb();
     multicore_fifo_push_blocking(TAG_FRAME | (uint32_t)slot);
 
     // Advance producer slot (pipeline)
@@ -117,7 +120,35 @@ void Ili9488Display::endFrame() {
     }
 }
 
-void Ili9488Display::initIfNeeded() {
+void Ili9488Display::lcdFillBlack()
+{
+    // full-screen window
+    setAddrWindow(0, 0, W - 1, H - 1);
+
+    gpio_put(PIN_DC, 1);
+    gpio_put(PIN_CS, 0);
+
+    spi_set_format(spi1, 16, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
+
+    // reuse slab buffer: fill it with 0
+    std::memset(s_slabBuf[0], 0, sizeof(s_slabBuf[0]));
+    for (int slab = 0; slab < NUM_SLABS; ++slab) {
+        int y0 = slab * SLAB_ROWS;
+        int y1 = y0 + SLAB_ROWS - 1;
+        if (y1 >= H) y1 = H - 1;
+        int rows = y1 - y0 + 1;
+
+        start_dma_slab(s_slabBuf[0], W * rows);
+        dma_channel_wait_for_finish_blocking(g_dma_tx);
+        while (spi_get_hw(spi1)->sr & SPI_SSPSR_BSY_BITS) tight_loop_contents();
+    }
+
+    spi_set_format(spi1, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
+    gpio_put(PIN_CS, 1);
+}
+
+void Ili9488Display::initIfNeeded()
+{
     if (inited) return;
 
     g_baud = spi_init(spi1, SPI_BAUD_HZ);
@@ -148,6 +179,9 @@ void Ili9488Display::initIfNeeded() {
     channel_config_set_dreq(&g_dma_cfg, spi_get_dreq(spi1, true));
 
     s_active = this;
+
+    // One-time clear of LCD RAM (uses DMA + 16-bit pixel streaming)
+    lcdFillBlack();
 
     // Clear state
     s_slotReady[0] = false;
@@ -198,7 +232,7 @@ void Ili9488Display::lcdInit() {
     writeDataByte(0x55); // RGB565
 
     writeCmd(0x36);
-    writeDataByte(0x40); // working MADCTL
+    writeDataByte(0x48); // 0x40 | 0x08  -> BGR
 
     writeCmd(0x29);
 }
@@ -331,30 +365,29 @@ void Ili9488Display::binFrameLines(Frame& f) {
 }
 
 // ---- slab raster (core1) ----
-inline void Ili9488Display::plotSlab(uint16_t* slab, int x, int yLocal, uint16_t c_swapped) {
+inline void Ili9488Display::plotSlab(uint16_t* slab, int x, int yLocal, uint16_t c565) {
     if ((unsigned)x >= (unsigned)W) return;
     if ((unsigned)yLocal >= (unsigned)SLAB_ROWS) return;
-    slab[yLocal * W + x] = c_swapped;
+    slab[yLocal * W + x] = c565;
 }
 
 void Ili9488Display::drawLineIntoSlab(uint16_t* slab, int slabY0, int slabY1, const Line& ln) {
     int x0 = ln.x0, y0 = ln.y0;
     int x1 = ln.x1, y1 = ln.y1;
 
-    // Clip to slab rectangle before Bresenham
     if (!clipLineToRect(x0, y0, x1, y1, 0, slabY0, W - 1, slabY1))
         return;
 
     int dx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
     int sx = (x0 < x1) ? 1 : -1;
-    int dy = (y1 > y0) ? (y0 - y1) : (y1 - y0); // negative
+    int dy = (y1 > y0) ? (y0 - y1) : (y1 - y0);
     int sy = (y0 < y1) ? 1 : -1;
     int err = dx + dy;
 
-    const uint16_t c_sw = swap565(ln.c565);
+    const uint16_t c = ln.c565;
 
     while (true) {
-        plotSlab(slab, x0, y0 - slabY0, c_sw);
+        plotSlab(slab, x0, y0 - slabY0, c);
         if (x0 == x1 && y0 == y1) break;
         int e2 = err << 1;
         if (e2 >= dy) { err += dy; x0 += sx; }
@@ -454,13 +487,16 @@ void Ili9488Display::core1_entry() {
             continue;
         }
 
+        __dmb();
         const Frame& f = s_frame[slot];
         d->renderAndFlushFrame(f);
 
         // Release slot
+        __dmb();
         s_slotReady[slot] = false;
 
         // Notify core0
+        __dmb();
         multicore_fifo_push_blocking(TAG_DONE | (uint32_t)slot);
     }
 }

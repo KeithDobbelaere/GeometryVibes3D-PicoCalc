@@ -1,12 +1,11 @@
 #pragma once
 #include <cstdint>
-#include <array>
 #include "render/Fixed.hpp"
 
 namespace gv {
 
 struct InputState {
-    bool thrust = false; // or "held"
+    bool thrust = false;
 };
 
 struct ShipState {
@@ -18,17 +17,17 @@ class Game {
 public:
     void reset();
     void update(const InputState& in, fx dt);
+
     const ShipState& ship() const { return shipState; }
 
-    // Trail history for option A
-    static constexpr int TRAIL = 48;
-    const std::array<fx, TRAIL>& trail() const { return trailY; }
-    int trailHead() const { return head; }
+    // Scroll forward through the map once (in “world X” units)
+    fx scrollX() const { return xScroll; }
+    bool finishedScroll() const { return finished; }
 
 private:
     ShipState shipState{};
-    std::array<fx, TRAIL> trailY{};
-    int head = 0;
+    fx xScroll{};
+    bool finished = false;
 };
 
 } // namespace gv

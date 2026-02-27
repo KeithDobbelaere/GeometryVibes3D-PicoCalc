@@ -64,6 +64,7 @@ private:
     int lastBinned = 0;
 
 private:
+    void lcdFillBlack();
     void initIfNeeded();
     void lcdReset();
     void lcdInit();
@@ -82,7 +83,6 @@ private:
     void renderAndFlushFrame(const Frame& f);
 
     // Slab raster helpers (core1)
-    static inline uint16_t swap565(uint16_t c) { return uint16_t((c << 8) | (c >> 8)); }
     static inline void plotSlab(uint16_t* slab, int x, int yLocal, uint16_t c_swapped);
     static void drawLineIntoSlab(uint16_t* slab, int slabY0, int slabY1, const Line& ln);
 };
