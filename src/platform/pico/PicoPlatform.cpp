@@ -1,5 +1,6 @@
 #include "../Platform.hpp"
 #include "Ili9488Display.hpp"
+#include "PicoFileSystem.hpp"
 #include "pico/stdlib.h"
 
 namespace gv {
@@ -29,8 +30,11 @@ public:
 
     IDisplay& display() override { return disp; }
 
+    IFileSystem& fs() override { return fs_; }
+
 private:
     Ili9488Display disp;
+    PicoFileSystem fs_;
     uint64_t last{};
 };
 

@@ -368,7 +368,7 @@ void Ili9488Display::binFrameLines(Frame& f) {
 inline void Ili9488Display::plotSlab(uint16_t* slab, int x, int yLocal, uint16_t c565) {
     if ((unsigned)x >= (unsigned)W) return;
     if ((unsigned)yLocal >= (unsigned)SLAB_ROWS) return;
-    slab[yLocal * W + x] = c565;
+    slab[yLocal * W + x] = c565; // NO SWAP
 }
 
 void Ili9488Display::drawLineIntoSlab(uint16_t* slab, int slabY0, int slabY1, const Line& ln) {
@@ -384,7 +384,7 @@ void Ili9488Display::drawLineIntoSlab(uint16_t* slab, int slabY0, int slabY1, co
     int sy = (y0 < y1) ? 1 : -1;
     int err = dx + dy;
 
-    const uint16_t c = ln.c565;
+    const uint16_t c = ln.c565; // NO SWAP
 
     while (true) {
         plotSlab(slab, x0, y0 - slabY0, c);

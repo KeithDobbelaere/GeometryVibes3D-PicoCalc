@@ -8,10 +8,43 @@ void Game::reset() {
 
     xScroll  = fx::fromInt(0);
     finished = false;
+
+    unloadLevel();
+}
+
+bool Game::loadLevel(const char* path) {
+    unloadLevel();
+
+    levelFile = std::fopen(path, "rb");
+    if (!levelFile) return false;
+
+    if (!read_header(levelFile, levelHdr)) {
+        unloadLevel();
+        return false;
+    }
+
+    // Reset scroll for the new level
+    xScroll  = fx::fromInt(0);
+    finished = false;
+    return true;
+}
+
+void Game::unloadLevel() {
+    if (levelFile) {
+        std::fclose(levelFile);
+        levelFile = nullptr;
+    }
+    std::memset(&levelHdr, 0, sizeof(levelHdr));
+}
+
+bool Game::readLevelColumn(uint16_t i, Column56& out) const {
+    if (!levelFile) return false;
+    if (i >= levelHdr.width) return false;
+    return read_column(levelFile, i, out);
 }
 
 void Game::update(const InputState& in, fx dt) {
-    // Keep basic “wave” vertical motion for now (so camera has something to track)
+    // Basic “wave” vertical motion for now
     const fx speedY = fx::fromInt(80);
     shipState.vy = in.thrust ? speedY : -speedY;
     shipState.y = shipState.y + shipState.vy * dt;
@@ -21,8 +54,10 @@ void Game::update(const InputState& in, fx dt) {
         const fx scrollSpeed = fx::fromInt(90); // world units/sec (tweak)
         xScroll = xScroll + scrollSpeed * dt;
 
-        // Temporary: one pass length until level loader is wired in
-        const fx testLength = fx::fromInt(332 * 10); // 332 cols * 10 units/col
+        // Use level width if loaded; else keep old fallback.
+        const int widthCols = levelFile ? int(levelHdr.width) : 332;
+        const fx testLength = fx::fromInt(widthCols * 10); // 10 units/col (matches your scene step)
+
         if (xScroll >= testLength) {
             xScroll = testLength;
             finished = true;

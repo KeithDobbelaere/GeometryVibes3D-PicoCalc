@@ -3,20 +3,9 @@
 
 namespace gv { IPlatform* createPlatform(); }
 
+volatile bool user_interrupt = false;
+
 int main() {
-    auto* platform = gv::createPlatform();
-    platform->init();
-
     gv::App app;
-    app.init(platform->display().width(), platform->display().height());
-
-    while (true) {
-        gv::InputState in = platform->pollInput();
-        float dt = platform->dtSeconds();
-
-        platform->display().beginFrame();
-        app.tick(in, dt);
-        platform->display().drawLines(app.drawList());
-        platform->display().endFrame();
-    }
+    return app.run(*gv::createPlatform()); // keep your current 800-frame test
 }

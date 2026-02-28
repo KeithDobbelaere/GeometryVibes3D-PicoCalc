@@ -44,6 +44,10 @@ add_executable(GeometryVibes3D-PicoCalc
     src/render/Renderer.cpp
     src/platform/pico/Ili9488Display.cpp
     src/platform/pico/PicoPlatform.cpp
+    src/platform/pico/PicoFileSystem.cpp
+    src/platform/pico/drivers/sdcard.c
+    src/platform/pico/drivers/fat32.c
+    src/platform/pico/drivers/clib.c
 )
 
 pico_set_program_name(GeometryVibes3D-PicoCalc "GeometryVibes3D-PicoCalc")
@@ -65,6 +69,7 @@ target_link_libraries(GeometryVibes3D-PicoCalc
 # Add the standard include files to the build
 target_include_directories(GeometryVibes3D-PicoCalc PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src
+    ${CMAKE_CURRENT_LIST_DIR}/src/platform/pico/drivers
 )
 
 pico_add_extra_outputs(GeometryVibes3D-PicoCalc)

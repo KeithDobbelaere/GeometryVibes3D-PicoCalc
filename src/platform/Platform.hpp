@@ -2,6 +2,7 @@
 #include <cstdint>
 #include "game/Game.hpp"
 #include "render/DrawList.hpp"
+#include "FileSystem.hpp"
 
 namespace gv {
 
@@ -23,6 +24,7 @@ public:
     virtual float dtSeconds() = 0;
     virtual InputState pollInput() = 0;
     virtual IDisplay& display() = 0;
+    virtual IFileSystem& fs() = 0;
 };
 
 } // namespace gv
