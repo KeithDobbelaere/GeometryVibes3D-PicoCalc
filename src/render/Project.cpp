@@ -71,8 +71,8 @@ void buildCameraBasis(Camera& cam) {
     Vec3fx tgt = cam.target;
 
     cam.fwd   = normalize3(sub3(tgt, cam.pos));
-    cam.right = normalize3(cross3(cam.up, cam.fwd));
-    cam.up2   = cross3(cam.right, cam.fwd);
+    cam.right = normalize3(cross3(cam.fwd, cam.up));
+    cam.up2   = normalize3(cross3(cam.right, cam.fwd));
 }
 
 bool projectPoint(const Camera& cam, const Vec3fx& world, Vec2i& out) {
@@ -82,23 +82,14 @@ bool projectPoint(const Camera& cam, const Vec3fx& world, Vec2i& out) {
     fx y = dot3(v, cam.up2);
     fx z = dot3(v, cam.fwd);
 
-    // Reject behind camera / too close
-    // current threshold 0.125 is too permissive for fixed-point + int16 output
-    static constexpr int32_t kNearRaw = (2 << fx::SHIFT); // 2.0 units
-    if (z.raw() <= kNearRaw) return false;
+    if (z.raw() <= (1 << fx::SHIFT) / 8) return false;
 
     fx invz = cam.focal / z;
     fx sx = cam.cx + x * invz;
-    fx sy = cam.cy + y * invz;
+    fx sy = cam.cy - y * invz;
 
-    int32_t ix = sx.roundToInt();
-    int32_t iy = sy.roundToInt();
-
-    // Reject if it can't be represented as int16, to avoid wrap artifacts
-    if (ix < -32768 || ix > 32767 || iy < -32768 || iy > 32767) return false;
-
-    out.x = (int16_t)ix;
-    out.y = (int16_t)iy;
+    out.x = (int16_t)sx.toInt();
+    out.y = (int16_t)sy.toInt();
     return true;
 }
 

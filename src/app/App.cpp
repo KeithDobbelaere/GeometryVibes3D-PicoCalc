@@ -38,7 +38,7 @@ void App::init(IPlatform& platform, int screenW, int screenH) {
     cam.cx = fx::fromInt(w / 2);
     cam.cy = fx::fromInt(h / 2);
 
-    cam.pos    = Vec3fx{ fx::fromInt(-20), fx::fromInt(20), fx::fromInt(-120) };
+    cam.pos    = Vec3fx{ fx::fromInt(-20), fx::fromInt(20), fx::fromInt(120) };
     cam.target = Vec3fx{ fx::fromInt(40),  fx::fromInt(0),  fx::fromInt(0) };
     cam.up     = Vec3fx{ fx::fromInt(0),   fx::fromInt(1),  fx::fromInt(0) };
 
@@ -57,7 +57,7 @@ void App::tick(const InputState& in, float dtSeconds) {
     cam.pos.x    = fx::fromInt(-20);
     cam.target.x = fx::fromInt(40);
 
-    cam.pos.z    = fx::fromInt(-120);
+    cam.pos.z    = fx::fromInt(120);
     cam.target.z = fx::fromInt(0);
 
     renderer.setCamera(cam);

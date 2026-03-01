@@ -1,6 +1,6 @@
 #include "Renderer.hpp"
-#include "game/Game.hpp"   // for Game + readLevelColumn
-#include "game/Level.hpp"  // ShapeId/ModId/Column56
+#include "app/Config.hpp"
+#include "game/Game.hpp"
 
 namespace gv {
 
@@ -10,72 +10,116 @@ void Renderer::setCamera(const Camera& c) {
 }
 
 static inline fx fi(int v) { return fx::fromInt(v); }
+static inline fx ff(float v) { return fx::fromFloat(v); }
 
-void Renderer::addBoxWire(DrawList& dl,
-                          fx cx, fx cy, fx cz,
-                          fx hx, fx hy, fx hz,
-                          uint16_t color) const
-{
-    Vec3fx p[8] = {
-        {cx - hx, cy - hy, cz - hz}, {cx + hx, cy - hy, cz - hz},
-        {cx + hx, cy + hy, cz - hz}, {cx - hx, cy + hy, cz - hz},
-        {cx - hx, cy - hy, cz + hz}, {cx + hx, cy - hy, cz + hz},
-        {cx + hx, cy + hy, cz + hz}, {cx - hx, cy + hy, cz + hz},
-    };
+inline void Renderer::applyMod(ModId mod, Vec3fx origin, Vec3fx& point) {
+    fx ox = origin.x, oy = origin.y, oz = origin.z;
+    fx &x = point.x, &y = point.y, &z = point.z;
 
-    Vec2i s[8];
-    bool ok[8];
-    for (int i = 0; i < 8; ++i) ok[i] = projectPoint(cam, p[i], s[i]);
+    fx dx = x - ox;
+    fx dy = y - oy;
+    fx dz = z - oz;
 
-    auto L = [&](int a, int b) {
-        if (ok[a] && ok[b]) dl.addLine(s[a].x, s[a].y, s[b].x, s[b].y, color);
-    };
+    switch (mod) {
+        case ModId::None:     break;
+        case ModId::RotLeft:  { fx ndx =  dy; fx ndy = -dx; dx = ndx; dy = ndy; } break;
+        case ModId::RotRight: { fx ndx = -dy; fx ndy =  dx; dx = ndx; dy = ndy; } break;
+        case ModId::Invert:   { dx = -dx; dy = -dy; } break;
+    }
 
-    L(0,1); L(1,2); L(2,3); L(3,0);
-    L(4,5); L(5,6); L(6,7); L(7,4);
-    L(0,4); L(1,5); L(2,6); L(3,7);
+    x = ox + dx;
+    y = oy + dy;
+    z = oz + dz;
 }
 
-void Renderer::addDiamondWire(DrawList& dl,
-                              fx cx, fx cy, fx cz,
-                              fx sx, fx sy,
-                              uint16_t color) const
-{
-    Vec3fx p[4] = {
-        {cx,      cy - sy, cz},
-        {cx + sx, cy,      cz},
-        {cx,      cy + sy, cz},
-        {cx - sx, cy,      cz},
-    };
-
-    Vec2i s[4];
-    bool ok[4];
-    for (int i = 0; i < 4; ++i) ok[i] = projectPoint(cam, p[i], s[i]);
-
-    auto L = [&](int a, int b) {
-        if (ok[a] && ok[b]) dl.addLine(s[a].x, s[a].y, s[b].x, s[b].y, color);
-    };
-
-    L(0,1); L(1,2); L(2,3); L(3,0);
-    L(0,2); L(1,3);
+static inline Vec3fx add3(const Vec3fx& a, const Vec3fx& b) {
+    return Vec3fx{ a.x + b.x, a.y + b.y, a.z + b.z };
 }
 
-void Renderer::addTriWire(DrawList& dl,
-                          fx x0, fx y0, fx z0,
-                          fx x1, fx y1, fx z1,
-                          fx x2, fx y2, fx z2,
-                          uint16_t color) const
-{
-    Vec3fx p3[3] = { {x0,y0,z0}, {x1,y1,z1}, {x2,y2,z2} };
-    Vec2i p2[3];
-    bool ok[3];
-    for (int i = 0; i < 3; ++i) ok[i] = projectPoint(cam, p3[i], p2[i]);
+static inline void line3(const Vec3fx& A, const Vec3fx& B, uint16_t color, const Camera& cam, DrawList& dl) {
+    Vec2i a, b;
+    if (projectPoint(cam, A, a) && projectPoint(cam, B, b))
+        dl.addLine(a.x, a.y, b.x, b.y, color);
+};
 
-    auto L = [&](int a, int b) {
-        if (ok[a] && ok[b]) dl.addLine(p2[a].x, p2[a].y, p2[b].x, p2[b].y, color);
+void Renderer::addCube(DrawList& dl, const Vec3fx& pos, uint16_t color) const {
+    const Vec3fx verts[] = {
+        { fi(0),         fi(0),         fi(0)         }, { fi(kCellSize), fi(0),         fi(0)         },
+        { fi(kCellSize), fi(kCellSize), fi(0)         }, { fi(0),         fi(kCellSize), fi(0)         },
+        { fi(0),         fi(0),         fi(kCellSize) }, { fi(kCellSize), fi(0),         fi(kCellSize) },
+        { fi(kCellSize), fi(kCellSize), fi(kCellSize) }, { fi(0),         fi(kCellSize), fi(kCellSize) } 
     };
 
-    L(0,1); L(1,2); L(2,0);
+    const int indices[] = {
+        0,1, 1,2, 2,3, 3,0,
+        4,5, 5,6, 6,7, 7,4,
+        0,4, 1,5, 2,6, 3,7
+    };
+
+    for (size_t i = 0; i < sizeof(indices)/sizeof(indices[0]); i += 2) {
+        Vec3fx vA = add3(pos, verts[indices[i]]);
+        Vec3fx vB = add3(pos, verts[indices[i+1]]);
+
+        line3(vA, vB, color, cam, dl);
+    }
+}
+
+void Renderer::addSquarePyramid(DrawList& dl, const Vec3fx& pos, uint16_t color,
+                                ModId mod, fx apexScale, const Vec3fx& origin) const
+{
+    const Vec3fx verts[] = {
+        { ff(0.5f*kCellSize), (fi(1)-apexScale)*fi(kCellSize), ff(0.5f*kCellSize) }, // apex
+        { fi(0),              fi(kCellSize),                   fi(kCellSize)      }, // base corner 0
+        { fi(kCellSize),      fi(kCellSize),                   fi(kCellSize)      }, // base corner 1
+        { fi(kCellSize),      fi(kCellSize),                   fi(0)              }, // base corner 2
+        { fi(0),              fi(kCellSize),                   fi(0)              }  // base corner 3
+    };
+
+    const int indices[] = {
+        0,1, 0,2, 0,3, 0,4, // sides
+        1,2, 2,3, 3,4, 4,1  // base
+    };
+
+    for (size_t i = 0; i < sizeof(indices)/sizeof(indices[0]); i += 2) {
+        Vec3fx vA = add3(pos, verts[indices[i]]);
+        Vec3fx vB = add3(pos, verts[indices[i+1]]);
+
+        applyMod(mod, origin, vA);
+        applyMod(mod, origin, vB);
+
+        line3(vA, vB, color, cam, dl);
+    }
+
+}
+
+void Renderer::addRightTriPrism(DrawList& dl, const Vec3fx& pos, uint16_t color,
+                                ModId mod, const Vec3fx& origin) const
+{
+    // right triangle prism with right angle at botom-right, hypotenuse facing backward:
+    const Vec3fx verts[] = {
+        { fi(kCellSize), fi(0),         fi(0)         }, // front-right-top
+        { fi(kCellSize), fi(kCellSize), fi(0)         }, // front-right-bottom
+        { fi(0),         fi(kCellSize), fi(0)         }, // front-left-bottom
+        { fi(kCellSize), fi(0),         fi(kCellSize) }, // back-right-top
+        { fi(kCellSize), fi(kCellSize), fi(kCellSize) }, // back-right-bottom
+        { fi(0),         fi(kCellSize), fi(kCellSize) }  // back-left-bottom
+    };
+
+    const int indices[] = {
+        0,1, 1,2, 2,0, // front face
+        3,4, 4,5, 5,3, // back face
+        0,3, 1,4, 2,5  // connecting edges
+    };
+
+    for (size_t i = 0; i < sizeof(indices)/sizeof(indices[0]); i += 2) {
+        Vec3fx vA = add3(pos, verts[indices[i]]);
+        Vec3fx vB = add3(pos, verts[indices[i+1]]);
+
+        applyMod(mod, origin, vA);
+        applyMod(mod, origin, vB);
+
+        line3(vA, vB, color, cam, dl);
+    }
 }
 
 void Renderer::buildScene(DrawList& dl, const Game& game, fx scrollX, fx playerY) const {
@@ -84,44 +128,38 @@ void Renderer::buildScene(DrawList& dl, const Game& game, fx scrollX, fx playerY
     const uint16_t kWire  = 0xFFFF; // white
     const uint16_t kGreen = 0x07E0; // green
 
-    // World scaling (matches your older "10 units per column" convention)
-    const fx colStepX = fi(10);
+    const fx colStepX = fi(kCellSize);
 
-    // Playfield: 9 cells tall. With playHalfH=18 => total 36 => 4 units/cell.
-    const fx cellH = fi(4);
-    const fx playHalfH   = fi(18);
+    // Playfield mapping
+    const fx cellH = fi(kCellSize);
+    const fx playHalfH   = ff(4.5f * kCellSize); // 9 rows total, centered on y=0
     const fx playCenterY = fi(0);
 
-    // ---- Draw the top/bottom wire slabs (test tunnel look) ----
-    const int bands = 18;
-    const fx slabHalfW = fi(70);
-    const fx slabHalfH = fi(18);
-    const fx slabHalfZ = fi(10);
+    // ---- Tunnel slabs (kept as-is) ----
+    // const int bands = 18;
+    // const fx slabHalfW = fi(70);
+    // const fx slabHalfH = fi(18);
+    // const fx slabHalfZ = fi(10);
 
-    for (int i = 0; i < bands; ++i) {
-        fx x = fi(i * 10) - scrollX + fi(40);
+    // for (int i = 0; i < bands; ++i) {
+    //     fx x = fi(i * 10) - scrollX + fi(40);
 
-        addBoxWire(dl, x, playCenterY + playHalfH + slabHalfH, fi(0),
-                   slabHalfW, slabHalfH, slabHalfZ, kWire);
+    //     addBoxWire(dl, x, playCenterY + playHalfH + slabHalfH, fi(0),
+    //                slabHalfW, slabHalfH, slabHalfZ, kWire);
 
-        addBoxWire(dl, x, playCenterY - playHalfH - slabHalfH, fi(0),
-                   slabHalfW, slabHalfH, slabHalfZ, kWire);
-    }
+    //     addBoxWire(dl, x, playCenterY - playHalfH - slabHalfH, fi(0),
+    //                slabHalfW, slabHalfH, slabHalfZ, kWire);
+    // }
 
-    // ---- Draw actual obstacles from the level ----
-    if (!game.hasLevel()) {
-        // fallback: nothing (or could draw a marker)
-        return;
-    }
+    // ---- Stream + render level ----
+    if (!game.hasLevel()) return;
 
     const int levelW = (int)game.levelHeader().width;
 
-    // Visible window in columns: enough to cover screen + some margin
-    // Convert scrollX (world units) -> current column index
-    int scrollCol = scrollX.toInt() / colStepX.toInt(); // safe since colStepX is int
+    int scrollCol = scrollX.toInt() / colStepX.toInt();
     if (scrollCol < 0) scrollCol = 0;
 
-    const int colsVisible = 64; // tune as needed; keeps SD seeks bounded
+    const int colsVisible = 64;
     int col0 = scrollCol - 6;
     if (col0 < 0) col0 = 0;
     int col1 = col0 + colsVisible;
@@ -132,57 +170,44 @@ void Renderer::buildScene(DrawList& dl, const Game& game, fx scrollX, fx playerY
         if (!game.readLevelColumn((uint16_t)cx, col))
             continue;
 
-        // World X position for this column
         fx worldX = mulInt(colStepX, cx) - scrollX + fi(40);
 
-        // Rows 0..8 (top->bottom or bottom->top depends on your editor convention)
-        // We’ll map y=0 to top, y=8 to bottom, centered around 0.
         for (int y = 0; y < kLevelHeight; ++y) {
             ShapeId sid = col.shape(y);
             if (sid == ShapeId::Empty) continue;
 
-            fx worldY = playCenterY + mulInt(cellH, (4 - y)); // y=0 highest
+            ModId mid = col.mod(y);
 
-            // simple sizing
-            const fx sx = fi(4);
-            const fx sy = fi(6);
+            // Cell center in world space
+            fx worldY = playCenterY + mulInt(cellH, (y - 4)); // 4 = half of level height (9 rows)
+            fx cz = fi(0);
+
+            // Modifier origin: for now, per-cell origin = cell center.
+            // Later: pass a group origin (e.g. start of a motif).
+            fx ox = worldX + ff(0.5f * kCellSize);
+            fx oy = worldY + ff(0.5f * kCellSize);
 
             switch (sid) {
                 case ShapeId::Square:
-                    // draw as a small box wire “pillar”
-                    addBoxWire(dl, worldX, worldY, fi(0), fi(4), fi(4), fi(4), kGreen);
+                    addCube(dl, {worldX, worldY, cz}, kGreen);
                     break;
 
                 case ShapeId::RightTri:
-                    // triangle in XY plane
-                    addTriWire(dl,
-                               worldX - sx, worldY - sy, fi(0),
-                               worldX + sx, worldY - sy, fi(0),
-                               worldX + sx, worldY + sy, fi(0),
-                               kGreen);
+                    addRightTriPrism(dl, {worldX, worldY, cz}, kGreen, mid, {ox, oy, cz});
                     break;
 
                 case ShapeId::HalfSpike:
-                    // smaller triangle
-                    addTriWire(dl,
-                               worldX - sx, worldY + fi(0), fi(0),
-                               worldX + sx, worldY + fi(0), fi(0),
-                               worldX,      worldY - sy,   fi(0),
-                               kGreen);
+                    addSquarePyramid(dl, {worldX, worldY, cz}, kGreen, mid, fx::fromFloat(0.5f), {ox, oy, cz});
                     break;
 
                 case ShapeId::FullSpike:
-                    // taller diamond spike marker
-                    addDiamondWire(dl, worldX, worldY, fi(0), fi(4), fi(8), kGreen);
+                    addSquarePyramid(dl, {worldX, worldY, cz}, kGreen, mid, fx::fromFloat(1.0f), {ox, oy, cz});
                     break;
 
                 default:
-                    // unknown future shape: draw a diamond placeholder
-                    addDiamondWire(dl, worldX, worldY, fi(0), fi(4), fi(6), kGreen);
+                    // Unknown shape ids: ignore for now (future-proof)
                     break;
             }
-
-            // ModId ignored for now (future: rotate/invert)
         }
     }
 }
