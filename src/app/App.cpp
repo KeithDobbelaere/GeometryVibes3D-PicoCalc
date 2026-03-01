@@ -12,8 +12,8 @@ int App::run(IPlatform& platform) {
 
     int frames = 0;
     while (true) {
-        InputState in = plat->pollInput();
         float dt = plat->dtSeconds();
+        InputState in = plat->pollInput();
 
         plat->display().beginFrame();
         tick(in, dt);
@@ -63,7 +63,7 @@ void App::tick(const InputState& in, float dtSeconds) {
     renderer.setCamera(cam);
 
     dl.clear();
-    renderer.buildScene(dl, game, game.scrollX(), game.ship().y);
+    renderer.buildScene(dl, game, game.scrollX());
 }
 
 } // namespace gv

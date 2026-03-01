@@ -42,7 +42,43 @@ static inline void line3(const Vec3fx& A, const Vec3fx& B, uint16_t color, const
         dl.addLine(a.x, a.y, b.x, b.y, color);
 };
 
-void Renderer::addCube(DrawList& dl, const Vec3fx& pos, uint16_t color) const {
+void Renderer::addShip(DrawList &dl, const Vec3fx &pos, uint16_t color) const
+{
+    // Local ship shape: a skinny arrowhead triangle, slightly extruded in Z.
+    // Coordinate system: +Y down in local *cell* space is fine as long as your world->screen
+    // projection is correct (sy = cy - y*invz).
+    const fx w  = ff(6.0f);   // width
+    const fx h  = ff(8.0f);   // length
+    const fx hz = ff(1.0f);   // slight extrusion thickness
+
+    // Triangle in XY: tip forward-right-ish, base behind
+    // (Tweak these three points to match the look you want.)
+    Vec3fx v0{ ff(0.0f), -h, ff(0.0f) }; // tip
+    Vec3fx v1{ -w,        h, ff(0.0f) }; // base left
+    Vec3fx v2{  w,        h, ff(0.0f) }; // base right
+
+    // Extrude in Z (front/back)
+    Vec3fx a0{ v0.x, v0.y, v0.z - hz }, a1{ v1.x, v1.y, v1.z - hz }, a2{ v2.x, v2.y, v2.z - hz };
+    Vec3fx b0{ v0.x, v0.y, v0.z + hz }, b1{ v1.x, v1.y, v1.z + hz }, b2{ v2.x, v2.y, v2.z + hz };
+
+    auto add = [&](const Vec3fx& p) { return Vec3fx{ pos.x + p.x, pos.y + p.y, pos.z + p.z }; };
+
+    // Wireframe edges (front tri, back tri, and the 3 connecting edges)
+    line3(add(a0), add(a1), color, cam, dl);
+    line3(add(a1), add(a2), color, cam, dl);
+    line3(add(a2), add(a0), color, cam, dl);
+
+    line3(add(b0), add(b1), color, cam, dl);
+    line3(add(b1), add(b2), color, cam, dl);
+    line3(add(b2), add(b0), color, cam, dl);
+
+    line3(add(a0), add(b0), color, cam, dl);
+    line3(add(a1), add(b1), color, cam, dl);
+    line3(add(a2), add(b2), color, cam, dl);
+}
+
+void Renderer::addCube(DrawList &dl, const Vec3fx &pos, uint16_t color) const
+{
     const Vec3fx verts[] = {
         { fi(0),         fi(0),         fi(0)         }, { fi(kCellSize), fi(0),         fi(0)         },
         { fi(kCellSize), fi(kCellSize), fi(0)         }, { fi(0),         fi(kCellSize), fi(0)         },
@@ -122,9 +158,8 @@ void Renderer::addRightTriPrism(DrawList& dl, const Vec3fx& pos, uint16_t color,
     }
 }
 
-void Renderer::buildScene(DrawList& dl, const Game& game, fx scrollX, fx playerY) const {
-    (void)playerY;
-
+void Renderer::buildScene(DrawList& dl, const Game& game, fx scrollX) const
+{
     const uint16_t kWire  = 0xFFFF; // white
     const uint16_t kGreen = 0x07E0; // green
 
@@ -210,6 +245,9 @@ void Renderer::buildScene(DrawList& dl, const Game& game, fx scrollX, fx playerY
             }
         }
     }
+    // ---- Draw ship (centerline) ----
+    const uint16_t kShip = 0xFFFF; // white for now (easy to see)
+    addShip(dl, Vec3fx{ fi(40), game.ship().y, fi(0) }, kShip);
 }
 
 } // namespace gv

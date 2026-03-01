@@ -3,12 +3,9 @@
 #include <cstdio>
 #include "render/Fixed.hpp"
 #include "game/Level.hpp"
+#include "game/Input.hpp"
 
 namespace gv {
-
-struct InputState {
-    bool thrust = false;
-};
 
 struct ShipState {
     fx y{};
@@ -40,7 +37,6 @@ private:
     fx xScroll{};
     bool finished = false;
 
-    // Level streaming
     FILE* levelFile = nullptr;
     LevelHeaderV1 levelHdr{};
 };

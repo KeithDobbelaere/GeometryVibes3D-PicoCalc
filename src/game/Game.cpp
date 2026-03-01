@@ -1,4 +1,5 @@
 #include "Game.hpp"
+#include "app/Config.hpp"
 
 namespace gv {
 
@@ -48,6 +49,10 @@ void Game::update(const InputState& in, fx dt) {
     const fx speedY = fx::fromInt(80);
     shipState.vy = in.thrust ? speedY : -speedY;
     shipState.y = shipState.y + shipState.vy * dt;
+    const fx halfH = fx::fromFloat(4.5f * gv::kCellSize);
+    const fx margin = fx::fromFloat(0.5f * gv::kCellSize);
+    if (shipState.y < -halfH + margin) shipState.y = -halfH + margin;
+    if (shipState.y >  halfH - margin) shipState.y =  halfH - margin;
 
     // Fixed-rate forward scroll (single pass)
     if (!finished) {
@@ -56,7 +61,7 @@ void Game::update(const InputState& in, fx dt) {
 
         // Use level width if loaded; else keep old fallback.
         const int widthCols = levelFile ? int(levelHdr.width) : 332;
-        const fx testLength = fx::fromInt(widthCols * 10); // 10 units/col (matches your scene step)
+        const fx testLength = fx::fromInt(widthCols * gv::kCellSize);
 
         if (xScroll >= testLength) {
             xScroll = testLength;

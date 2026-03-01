@@ -34,20 +34,21 @@ project(GeometryVibes3D-PicoCalc C CXX ASM)
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
-
 add_executable(GeometryVibes3D-PicoCalc
     src/main.cpp
     src/app/App.cpp
     src/game/Game.cpp
     src/render/Project.cpp
-    src/render/DrawList.cpp
     src/render/Renderer.cpp
     src/platform/pico/Ili9488Display.cpp
     src/platform/pico/PicoPlatform.cpp
     src/platform/pico/PicoFileSystem.cpp
+    src/platform/pico/PicoInput.cpp
+
     src/platform/pico/drivers/sdcard.c
     src/platform/pico/drivers/fat32.c
     src/platform/pico/drivers/clib.c
+    src/platform/pico/drivers/southbridge.c
 )
 
 pico_set_program_name(GeometryVibes3D-PicoCalc "GeometryVibes3D-PicoCalc")
@@ -64,6 +65,7 @@ target_link_libraries(GeometryVibes3D-PicoCalc
     hardware_spi
     hardware_gpio
     hardware_dma
+    hardware_i2c
 )
 
 # Add the standard include files to the build

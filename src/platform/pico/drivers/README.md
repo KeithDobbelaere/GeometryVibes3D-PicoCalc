@@ -9,6 +9,7 @@ This directory contains SD card + FAT32 drivers copied from:
 Files included (with minimal integration changes as needed for this project):
 - `sdcard.c`, `sdcard.h`
 - `fat32.c`, `fat32.h`
+- `southbridge.c`, `southbridge.h`
 - `clib.c` (newlib stdio bindings)
 
 ## License / Attribution

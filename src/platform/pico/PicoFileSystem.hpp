@@ -1,5 +1,5 @@
 #pragma once
-#include "platform/FileSystem.hpp"
+#include "platform/IFileSystem.hpp"
 #include <cstdio>
 
 namespace gv {

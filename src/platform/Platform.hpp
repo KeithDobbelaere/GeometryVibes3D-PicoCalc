@@ -1,8 +1,8 @@
 #pragma once
 #include <cstdint>
-#include "game/Game.hpp"
 #include "render/DrawList.hpp"
-#include "FileSystem.hpp"
+#include "IFileSystem.hpp"
+#include "IInput.hpp"
 
 namespace gv {
 
@@ -25,6 +25,7 @@ public:
     virtual InputState pollInput() = 0;
     virtual IDisplay& display() = 0;
     virtual IFileSystem& fs() = 0;
+    virtual IInput& input() = 0;
 };
 
 } // namespace gv
