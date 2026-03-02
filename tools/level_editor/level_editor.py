@@ -90,6 +90,23 @@ ENDCAP_OBS = [
 # Portal: relative to last column (width-1)
 PORTAL_REL = {"dx": -3, "y": 4}
 
+# --- Binary export mappings (v1) ---
+SHAPE_ID = {
+    "empty": 0,
+    "square": 1,
+    "right_tri": 2,
+    "half_spike": 3,
+    "full_spike": 4,
+}
+ID_SHAPE = {v: k for k, v in SHAPE_ID.items()}
+
+MOD_ID = {
+    "none": 0,
+    "rot_left": 1,
+    "rot_right": 2,
+    "invert": 3,
+}
+
 # -----------------------------
 # Data model
 # -----------------------------
@@ -187,6 +204,21 @@ class Level:
 
     def get_obstacle(self, x: int, y: int) -> Optional[Obstacle]:
         return self.obstacles.get(self.key(x, y))
+    
+    def effective_obstacle_at(self, x: int, y: int):
+        """Return authored obstacle if present; else if in endcap, return endcap obstacle; else None."""
+        obs = self.get_obstacle(x, y)
+        if obs:
+            return obs
+
+        # endcap overlay
+        last = self.width - 1
+        if x >= self.endcap_x0():
+            dx = x - last
+            for e in ENDCAP_OBS:
+                if int(e["dx"]) == dx and int(e["y"]) == y:
+                    return Obstacle.from_obj(e)
+        return None
 
     def clear_cell(self, x: int, y: int) -> None:
         if not self.in_bounds(x, y):
@@ -222,6 +254,55 @@ class Level:
     def portal_abs(self) -> Tuple[int, int]:
         last = self.width - 1
         return (last + int(PORTAL_REL["dx"]), int(PORTAL_REL["y"]))
+    
+    def write_bin(self, path: str) -> None:
+        # Ensure authored data is clean; export will still include endcap via effective_obstacle_at
+        self.strip_endcap_from_authored()
+
+        magic = b"GVL1"
+        version = 1
+        width = int(self.width)
+        height = int(self.height)  # should be 9
+        sx, sy = self.start
+
+        portal_dx = int(PORTAL_REL["dx"]) & 0xFF  # store as int8 in file
+        portal_y = int(PORTAL_REL["y"]) & 0xFF
+        endcap_w = int(ENDCAP_W) & 0xFF
+
+        header = bytearray()
+        header += magic
+        header += bytes([version])
+        header += width.to_bytes(2, "little", signed=False)
+        header += bytes([height & 0xFF])
+        header += bytes([sx & 0xFF, sy & 0xFF])
+        header += int.to_bytes((portal_dx if portal_dx < 128 else portal_dx - 256), 1, "little", signed=True)
+        header += bytes([portal_y])
+        header += bytes([endcap_w])
+        header += b"\x00\x00\x00"  # reserved to 16 bytes
+
+        with open(path, "wb") as f:
+            f.write(header)
+
+            # Columns: width * 7 bytes
+            for x in range(width):
+                col = 0
+                for y in range(9):
+                    obs = self.effective_obstacle_at(x, y)
+                    if obs is None:
+                        shape_id = 0
+                        mod_id = 0
+                    else:
+                        shape_id = SHAPE_ID.get(obs.shape, 0) & 0xF
+                        mod_id = MOD_ID.get(obs.mod, 0) & 0x3
+                        # modifiers only meaningful for some shapes; enforce like editor
+                        if obs.shape not in MOD_SHAPES:
+                            mod_id = 0
+
+                    cell6 = (shape_id & 0xF) | ((mod_id & 0x3) << 4)
+                    col |= (cell6 & 0x3F) << (y * 6)
+
+                # top 2 bits reserved (0)
+                f.write(int(col).to_bytes(7, "little", signed=False))
 
     def to_json_obj(self) -> Dict[str, Any]:
         # authored obstacles (without endcap)
@@ -351,6 +432,7 @@ class EditorApp:
         tk.Button(left, text="New (clear)…", command=self.new_level).pack(fill="x", pady=(4, 2))
         tk.Button(left, text="Import JSON…", command=self.import_json).pack(fill="x", pady=2)
         tk.Button(left, text="Export JSON…", command=self.export_json).pack(fill="x", pady=2)
+        tk.Button(left, text="Export BIN…", command=self.export_bin).pack(fill="x", pady=2)
 
         tk.Label(left, text="").pack(pady=6)
 
@@ -953,6 +1035,19 @@ class EditorApp:
         self.canvas.xview_scroll(delta * 3, "units")
 
     # -------- File ops --------
+    def export_bin(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Export Level Binary",
+            defaultextension=".bin",
+            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")]
+        )
+        if not path:
+            return
+        try:
+            self.level.write_bin(path)
+            messagebox.showinfo("Export", f"Saved:\n{path}")
+        except Exception as ex:
+            messagebox.showerror("Export failed", str(ex))
 
     def export_json(self) -> None:
         path = filedialog.asksaveasfilename(

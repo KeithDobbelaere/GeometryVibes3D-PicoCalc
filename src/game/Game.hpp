@@ -32,10 +32,18 @@ public:
     fx scrollX() const { return xScroll; }
     bool finishedScroll() const { return finished; }
 
+    bool collided() const { return hit; }
+    void clearCollision() { hit = false; }
+
 private:
+    bool checkCollisionAt(fx shipY) const;
+    static void unapplyMod(ModId mod, fx ox, fx oy, fx& x, fx& y);
+    static bool collideCell(ShapeId sid, ModId mid, fx lx, fx ly, fx lz, fx r);
+
     ShipState shipState{};
     fx xScroll{};
     bool finished = false;
+    bool hit = false;
 
     FILE* levelFile = nullptr;
     LevelHeaderV1 levelHdr{};

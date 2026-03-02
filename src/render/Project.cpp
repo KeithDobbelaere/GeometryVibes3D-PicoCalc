@@ -72,7 +72,7 @@ void buildCameraBasis(Camera& cam) {
 
     cam.fwd   = normalize3(sub3(tgt, cam.pos));
     cam.right = normalize3(cross3(cam.fwd, cam.up));
-    cam.up2   = normalize3(cross3(cam.right, cam.fwd));
+    cam.up2   = normalize3(cross3(cam.fwd, cam.right));
 }
 
 bool projectPoint(const Camera& cam, const Vec3fx& world, Vec2i& out) {
