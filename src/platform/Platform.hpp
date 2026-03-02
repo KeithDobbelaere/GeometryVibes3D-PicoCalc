@@ -21,7 +21,7 @@ class IPlatform {
 public:
     virtual ~IPlatform() = default;
     virtual void init() = 0;
-    virtual float dtSeconds() = 0;
+    virtual uint32_t dtUs() = 0;
     virtual InputState pollInput() = 0;
     virtual IDisplay& display() = 0;
     virtual IFileSystem& fs() = 0;

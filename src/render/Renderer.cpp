@@ -10,7 +10,6 @@ void Renderer::setCamera(const Camera& c) {
 }
 
 static inline fx fi(int v) { return fx::fromInt(v); }
-static inline fx ff(float v) { return fx::fromFloat(v); }
 
 inline void Renderer::applyMod(ModId mod, Vec3fx origin, Vec3fx& point) {
     fx ox = origin.x, oy = origin.y, oz = origin.z;
@@ -42,28 +41,61 @@ static inline void line3(const Vec3fx& A, const Vec3fx& B, uint16_t color, const
         dl.addLine(a.x, a.y, b.x, b.y, color);
 };
 
-void Renderer::addShip(DrawList &dl, const Vec3fx &pos, uint16_t color) const
+void Renderer::addShip(DrawList& dl, const Vec3fx& pos, uint16_t color, fx shipY, fx shipVy) const
 {
-    // Local ship shape: a skinny arrowhead triangle, slightly extruded in Z.
-    // Coordinate system: +Y down in local *cell* space is fine as long as your world->screen
-    // projection is correct (sy = cy - y*invz).
-    const fx w  = ff(6.0f);   // width
-    const fx h  = ff(8.0f);   // length
-    const fx hz = ff(1.0f);   // slight extrusion thickness
+    // --- size: about half a cell wide ---
+    const fx halfW = fi(kCellSize/4);  // half-width => full width ~ 0.5 cell
+    const fx len   = fi(kCellSize) * fx::fromRatio(9, 20);  // forward length ~ 0.45 cell
+    const fx hz    = fi(kCellSize) * fx::fromRatio(3, 50);  // slight extrusion ~ 0.06 cell
 
-    // Triangle in XY: tip forward-right-ish, base behind
-    // (Tweak these three points to match the look you want.)
-    Vec3fx v0{ ff(0.0f), -h, ff(0.0f) }; // tip
-    Vec3fx v1{ -w,        h, ff(0.0f) }; // base left
-    Vec3fx v2{  w,        h, ff(0.0f) }; // base right
+    // Local triangle in XY, pointing straight ahead (+X) when angle = 0.
+    // Tip forward, base behind.
+    Vec3fx v0{  len,  fx::zero(), fx::zero() };       // tip
+    Vec3fx v1{ -len,  halfW,      fx::zero() };       // base top
+    Vec3fx v2{ -len, -halfW,      fx::zero() };       // base bottom
 
-    // Extrude in Z (front/back)
+    // Decide if we are clipping into the slabs:
+    const fx playHalfH = fi(9*kCellSize/2); // 45
+    const fx clipZoneStart = playHalfH - halfW;   // within half-width of boundary
+    const fx absY = (shipY.raw() < 0) ? fx::fromRaw(-shipY.raw()) : shipY;
+
+    const bool clipping = (absY > clipZoneStart);
+
+    // Tilt angle: point up/down only when NOT clipping.
+    fx c = fx::one();
+    fx s = fx::zero();
+
+    if (!clipping) {
+        // cos(45) == sin(45)
+        constexpr fx cos45 = fx::fromRaw(46341); // ~0.70710678118
+        c = cos45;
+        if (shipVy.raw() > 0) {
+            s = cos45;   // tilt "up"
+        } else if (shipVy.raw() < 0) {
+            s = -cos45;  // tilt "down"
+        } else {
+            s = fx::zero();          // stationary => straight
+            c = fx::one();
+        }
+    }
+
+    auto rotZ = [&](Vec3fx& p) {
+        // Rotate in XY plane around Z: (x',y') = (x*c - y*s, x*s + y*c)
+        fx x = p.x;
+        fx y = p.y;
+        p.x = x * c - y * s;
+        p.y = x * s + y * c;
+    };
+
+    rotZ(v0); rotZ(v1); rotZ(v2);
+
+    // Extrude in Z
     Vec3fx a0{ v0.x, v0.y, v0.z - hz }, a1{ v1.x, v1.y, v1.z - hz }, a2{ v2.x, v2.y, v2.z - hz };
     Vec3fx b0{ v0.x, v0.y, v0.z + hz }, b1{ v1.x, v1.y, v1.z + hz }, b2{ v2.x, v2.y, v2.z + hz };
 
     auto add = [&](const Vec3fx& p) { return Vec3fx{ pos.x + p.x, pos.y + p.y, pos.z + p.z }; };
 
-    // Wireframe edges (front tri, back tri, and the 3 connecting edges)
+    // Wireframe edges
     line3(add(a0), add(a1), color, cam, dl);
     line3(add(a1), add(a2), color, cam, dl);
     line3(add(a2), add(a0), color, cam, dl);
@@ -104,7 +136,7 @@ void Renderer::addSquarePyramid(DrawList& dl, const Vec3fx& pos, uint16_t color,
                                 ModId mod, fx apexScale, const Vec3fx& origin) const
 {
     const Vec3fx verts[] = {
-        { ff(0.5f*kCellSize), (fi(1)-apexScale)*fi(kCellSize), ff(0.5f*kCellSize) }, // apex
+        { fi(kCellSize/2),    (fi(1)-apexScale)*fi(kCellSize), fi(kCellSize/2)    }, // apex
         { fi(0),              fi(kCellSize),                   fi(kCellSize)      }, // base corner 0
         { fi(kCellSize),      fi(kCellSize),                   fi(kCellSize)      }, // base corner 1
         { fi(kCellSize),      fi(kCellSize),                   fi(0)              }, // base corner 2
@@ -158,6 +190,22 @@ void Renderer::addRightTriPrism(DrawList& dl, const Vec3fx& pos, uint16_t color,
     }
 }
 
+static inline void rectWireXZ(
+    DrawList& dl, const Camera& cam,
+    fx x0, fx x1, fx y, fx z0, fx z1,
+    uint16_t color)
+{
+    Vec3fx p00{ x0, y, z0 };
+    Vec3fx p10{ x1, y, z0 };
+    Vec3fx p11{ x1, y, z1 };
+    Vec3fx p01{ x0, y, z1 };
+
+    line3(p00, p10, color, cam, dl);
+    line3(p10, p11, color, cam, dl);
+    line3(p11, p01, color, cam, dl);
+    line3(p01, p00, color, cam, dl);
+}
+
 void Renderer::buildScene(DrawList& dl, const Game& game, fx scrollX) const
 {
     const uint16_t kWire  = 0xFFFF; // white
@@ -167,24 +215,8 @@ void Renderer::buildScene(DrawList& dl, const Game& game, fx scrollX) const
 
     // Playfield mapping
     const fx cellH = fi(kCellSize);
-    const fx playHalfH   = ff(4.5f * kCellSize); // 9 rows total, centered on y=0
+    const fx playHalfH = fi(9*kCellSize/2); // 45
     const fx playCenterY = fi(0);
-
-    // ---- Tunnel slabs (kept as-is) ----
-    // const int bands = 18;
-    // const fx slabHalfW = fi(70);
-    // const fx slabHalfH = fi(18);
-    // const fx slabHalfZ = fi(10);
-
-    // for (int i = 0; i < bands; ++i) {
-    //     fx x = fi(i * 10) - scrollX + fi(40);
-
-    //     addBoxWire(dl, x, playCenterY + playHalfH + slabHalfH, fi(0),
-    //                slabHalfW, slabHalfH, slabHalfZ, kWire);
-
-    //     addBoxWire(dl, x, playCenterY - playHalfH - slabHalfH, fi(0),
-    //                slabHalfW, slabHalfH, slabHalfZ, kWire);
-    // }
 
     // ---- Stream + render level ----
     if (!game.hasLevel()) return;
@@ -200,6 +232,19 @@ void Renderer::buildScene(DrawList& dl, const Game& game, fx scrollX) const
     int col1 = col0 + colsVisible;
     if (col1 > levelW) col1 = levelW;
 
+    // ---- Bounds planes (top/bottom of playfield) ----
+    const fx z0 = fi(0);
+    const fx z1 = fi(kCellSize);                 // match obstacle depth
+    const fx yTop = playCenterY + playHalfH;
+    const fx yBot = playCenterY - playHalfH;
+    // Visible X span (pad a bit so it doesn’t pop at edges)
+    const fx xLeft  = mulInt(colStepX, col0) - scrollX + fi(40) - fi(kCellSize * 2);
+    const fx xRight = mulInt(colStepX, col1) - scrollX + fi(40) + fi(kCellSize * 2);
+
+    // Draw top/bottom rectangles
+    rectWireXZ(dl, cam, xLeft, xRight, yTop, z0, z1, kWire);
+    rectWireXZ(dl, cam, xLeft, xRight, yBot, z0, z1, kWire);
+
     Column56 col{};
     for (int cx = col0; cx < col1; ++cx) {
         if (!game.readLevelColumn((uint16_t)cx, col))
@@ -214,13 +259,13 @@ void Renderer::buildScene(DrawList& dl, const Game& game, fx scrollX) const
             ModId mid = col.mod(y);
 
             // Cell center in world space
-            fx worldY = playCenterY + mulInt(cellH, (y - 4)); // 4 = half of level height (9 rows)
+            fx worldY = playCenterY - playHalfH + mulInt(cellH, y);
             fx cz = fi(0);
 
             // Modifier origin: for now, per-cell origin = cell center.
             // Later: pass a group origin (e.g. start of a motif).
-            fx ox = worldX + ff(0.5f * kCellSize);
-            fx oy = worldY + ff(0.5f * kCellSize);
+            fx ox = worldX + fi(kCellSize/2);
+            fx oy = worldY + fi(kCellSize/2);
 
             switch (sid) {
                 case ShapeId::Square:
@@ -232,11 +277,11 @@ void Renderer::buildScene(DrawList& dl, const Game& game, fx scrollX) const
                     break;
 
                 case ShapeId::HalfSpike:
-                    addSquarePyramid(dl, {worldX, worldY, cz}, kGreen, mid, fx::fromFloat(0.5f), {ox, oy, cz});
+                    addSquarePyramid(dl, {worldX, worldY, cz}, kGreen, mid, fx::half(), {ox, oy, cz});
                     break;
 
                 case ShapeId::FullSpike:
-                    addSquarePyramid(dl, {worldX, worldY, cz}, kGreen, mid, fx::fromFloat(1.0f), {ox, oy, cz});
+                    addSquarePyramid(dl, {worldX, worldY, cz}, kGreen, mid, fx::one(), {ox, oy, cz});
                     break;
 
                 default:
@@ -246,8 +291,8 @@ void Renderer::buildScene(DrawList& dl, const Game& game, fx scrollX) const
         }
     }
     // ---- Draw ship (centerline) ----
-    const uint16_t kShip = 0xFFFF; // white for now (easy to see)
-    addShip(dl, Vec3fx{ fi(40), game.ship().y, fi(0) }, kShip);
+    const uint16_t kShip = 0xFFFF; // white for now
+    addShip(dl, Vec3fx{ fi(40), game.ship().y, fi(kCellSize/2) }, kShip, game.ship().y, game.ship().vy);
 }
 
 } // namespace gv

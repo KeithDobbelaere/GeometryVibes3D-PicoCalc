@@ -25,6 +25,10 @@ struct fx {
         return fx{ raw, raw_tag{} };
     }
 
+    static constexpr fx fromRatio(int32_t num, int32_t den) {
+        return fromRaw((int32_t)(((int64_t)num << SHIFT) / den));
+    }
+
     // ---- conversions ----
     constexpr int32_t raw() const { return v; }
     constexpr int32_t toInt() const { return v >> SHIFT; }
@@ -36,6 +40,12 @@ struct fx {
     constexpr int32_t roundToInt() const {
         const int32_t half = (1 << (SHIFT - 1));
         return (v >= 0) ? ((v + half) >> SHIFT) : ((v - half) >> SHIFT);
+    }
+
+    static inline fx fromMicros(uint32_t us) {
+        const int64_t num = ((int64_t)us << SHIFT);
+        const int64_t raw = (num + 500000LL) / 1000000LL; // round to nearest
+        return fromRaw((int32_t)raw);
     }
 
     // ---- constants ----

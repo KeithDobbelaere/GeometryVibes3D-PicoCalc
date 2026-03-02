@@ -17,11 +17,11 @@ public:
         kb_.init();
     }
 
-    float dtSeconds() override {
+    uint32_t dtUs() override {
         uint64_t now = time_us_64();
         uint64_t us = now - last;
         last = now;
-        return (float)us / 1000000.0f;
+        return (uint32_t)us;
     }
 
     InputState pollInput() override {

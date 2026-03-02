@@ -12,7 +12,7 @@ int App::run(IPlatform& platform) {
 
     int frames = 0;
     while (true) {
-        float dt = plat->dtSeconds();
+        uint32_t dt = plat->dtUs();
         InputState in = plat->pollInput();
 
         plat->display().beginFrame();
@@ -45,14 +45,19 @@ void App::init(IPlatform& platform, int screenW, int screenH) {
     renderer.setCamera(cam);
 }
 
-void App::tick(const InputState& in, float dtSeconds) {
-    fx dt = fx::fromFloat(dtSeconds);
+void App::tick(const InputState& in, uint32_t dtUs) {
+    fx dt = fx::fromMicros(dtUs);
     game.update(in, dt);
 
     Camera cam = renderer.camera();
 
-    cam.pos.y    = fx::fromInt(22) + game.ship().y * fx::fromFloat(0.15f);
-    cam.target.y = fx::fromInt(0); // keep target stable to avoid pitch wobble
+    // Camera follows ship vertically (world shifts up/down like the original).
+    // Move both pos.y and target.y to avoid changing pitch.
+    const fx follow = fx::fromRatio(3, 20); // 0.15
+    const fx yOff = game.ship().y * follow;
+
+    cam.pos.y    = fx::fromInt(22) + yOff;
+    cam.target.y = fx::fromInt(0)  + yOff;
 
     cam.pos.x    = fx::fromInt(-20);
     cam.target.x = fx::fromInt(40);

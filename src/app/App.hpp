@@ -13,7 +13,7 @@ public:
 
 private:
     void init(IPlatform& platform, int screenW, int screenH);
-    void tick(const InputState& in, float dtSeconds);
+    void tick(const InputState& in, uint32_t dtUs);
 
     const DrawList& drawList() const { return dl; }
 

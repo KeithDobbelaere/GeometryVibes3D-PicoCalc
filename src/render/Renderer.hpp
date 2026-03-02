@@ -20,7 +20,7 @@ private:
     static inline void applyMod(ModId mod, Vec3fx origin, Vec3fx& point);
 
     // --- Shape constructors ---
-    void addShip(DrawList& dl, const Vec3fx& pos, uint16_t color) const;
+    void addShip(DrawList& dl, const Vec3fx& pos, uint16_t color, fx shipY, fx shipVy) const;
 
     void addCube(DrawList& dl, const Vec3fx& pos, uint16_t color) const;
 

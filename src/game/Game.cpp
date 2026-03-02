@@ -49,10 +49,11 @@ void Game::update(const InputState& in, fx dt) {
     const fx speedY = fx::fromInt(80);
     shipState.vy = in.thrust ? speedY : -speedY;
     shipState.y = shipState.y + shipState.vy * dt;
-    const fx halfH = fx::fromFloat(4.5f * gv::kCellSize);
-    const fx margin = fx::fromFloat(0.5f * gv::kCellSize);
-    if (shipState.y < -halfH + margin) shipState.y = -halfH + margin;
-    if (shipState.y >  halfH - margin) shipState.y =  halfH - margin;
+    
+    const fx playHalfH = fx::fromInt((9 * kCellSize)/2);
+
+    if (shipState.y < -playHalfH) shipState.y = -playHalfH;
+    if (shipState.y >  playHalfH) shipState.y =  playHalfH;
 
     // Fixed-rate forward scroll (single pass)
     if (!finished) {
