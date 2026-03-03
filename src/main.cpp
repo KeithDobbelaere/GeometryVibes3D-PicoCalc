@@ -1,5 +1,5 @@
 #include "app/App.hpp"
-#include "platform/Platform.hpp"
+#include "platform/IPlatform.hpp"
 
 namespace gv { IPlatform* createPlatform(); }
 

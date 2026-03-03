@@ -1,5 +1,5 @@
 #pragma once
-#include "../Platform.hpp"
+#include "../IDisplay.hpp"
 #include <cstdint>
 #include <cstddef>
 

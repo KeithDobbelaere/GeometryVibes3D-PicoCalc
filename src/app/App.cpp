@@ -1,5 +1,6 @@
 #include "App.hpp"
 #include "app/Config.hpp"
+#include "platform/Keys.hpp"
 
 namespace gv {
 
@@ -13,7 +14,23 @@ int App::run(IPlatform& platform) {
 
     while (true) {
         uint32_t dt = plat->dtUs();
-        InputState in = plat->pollInput();
+
+        // InputState mapping lives at the app layer now.
+        plat->input().update();
+        const IInput& kb = plat->input();
+
+        InputState in{};
+        in.thrust        = kb.down(KEY_SPACE);
+        in.thrustPressed = kb.pressed(KEY_SPACE);
+
+        in.up    = kb.down(KEY_UP);
+        in.down  = kb.down(KEY_DOWN);
+        in.left  = kb.down(KEY_LEFT);
+        in.right = kb.down(KEY_RIGHT);
+
+        in.confirm = kb.pressed(KEY_ENTER) || kb.pressed(KEY_RETURN);
+        in.back    = kb.pressed(KEY_ESC)   || kb.pressed(KEY_BACKSPACE);
+        in.pausePressed = kb.pressed(KEY_ESC) || kb.pressed(KEY_F1) || kb.pressed(KEY_POWER);
 
         plat->display().beginFrame();
         tick(in, dt);
@@ -31,7 +48,6 @@ void App::init(IPlatform& platform, int screenW, int screenH) {
     game.reset();
     game.setFileSystem(&platform.fs());
 
-    // Load the first level (ignore failure for now; we can add an on-screen indicator later).
     (void)game.loadLevel("levels/L02.BIN");
 
     Camera cam{};
@@ -52,13 +68,11 @@ void App::tick(const InputState& in, uint32_t dtUs) {
 
     Camera cam = renderer.camera();
 
-    // We follow the ship vertically by moving both pos.y and target.y so we don't change pitch.
     const fx yOff = game.ship().y * kCameraFollow;
 
     cam.pos.y    = fx::fromInt(22) + yOff;
     cam.target.y = fx::fromInt(0)  + yOff;
 
-    // We keep my other camera axes locked for now.
     cam.pos.x    = fx::fromInt(kCamPosX);
     cam.target.x = fx::fromInt(kCamTgtX);
 

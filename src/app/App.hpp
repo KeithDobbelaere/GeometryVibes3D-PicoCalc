@@ -1,5 +1,5 @@
 #pragma once
-#include "platform/Platform.hpp"
+#include "platform/IPlatform.hpp"
 #include "game/Game.hpp"
 #include "render/Renderer.hpp"
 #include "render/DrawList.hpp"

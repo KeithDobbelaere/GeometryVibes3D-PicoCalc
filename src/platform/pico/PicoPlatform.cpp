@@ -1,8 +1,7 @@
-#include "../Platform.hpp"
+#include "../IPlatform.hpp"
 #include "Ili9488Display.hpp"
 #include "PicoFileSystem.hpp"
 #include "PicoInput.hpp"
-#include "Keyboard.hpp"
 #include "pico/stdlib.h"
 
 namespace gv {
@@ -22,27 +21,6 @@ public:
         uint64_t us = now - last;
         last = now;
         return (uint32_t)us;
-    }
-
-    InputState pollInput() override {
-        kb_.update();
-
-        InputState in{};
-        // Minimal gameplay mapping
-        in.thrust = kb_.down(KEY_SPACE);
-        in.thrustPressed = kb_.pressed(KEY_SPACE);
-
-        // Menu/navigation mapping (already in your InputState)
-        in.up    = kb_.down(KEY_UP);
-        in.down  = kb_.down(KEY_DOWN);
-        in.left  = kb_.down(KEY_LEFT);
-        in.right = kb_.down(KEY_RIGHT);
-
-        in.confirm = kb_.pressed(KEY_ENTER) || kb_.pressed(KEY_RETURN);
-        in.back    = kb_.pressed(KEY_ESC) || kb_.pressed(KEY_BACKSPACE);
-        in.pausePressed = kb_.pressed(KEY_ESC) || kb_.pressed(KEY_F1) || kb_.pressed(KEY_POWER);
-
-        return in;
     }
 
     IDisplay& display() override { return disp; }

@@ -1,6 +1,8 @@
 #pragma once
 
-// Keyboard key definitions
+// Keyboard key definitions (shared across platforms).
+// Values match the PicoCalc keyboard event codes.
+
 #define KEY_MOD_ALT         (0xA1)
 #define KEY_MOD_SHL         (0xA2)
 #define KEY_MOD_SHR         (0xA3)
