@@ -13,6 +13,7 @@ struct InputState {
     bool confirm = false;        // "pressed this frame"
     bool back = false;           // "pressed this frame"
     bool pausePressed = false;   // "pressed this frame"
+    bool thrustPressed = false;  // pressed this frame
 };
 
 } // namespace gv

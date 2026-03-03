@@ -1,6 +1,5 @@
 #include "PicoFileSystem.hpp"
 
-// drivers
 extern "C" {
 #include "sdcard.h"
 #include "fat32.h"

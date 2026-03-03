@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <array>
 #include "DrawList.hpp"
 #include "Project.hpp"
 #include "game/Level.hpp"
@@ -14,11 +15,23 @@ public:
     const Camera& camera() const { return cam; }
 
     void buildScene(DrawList& dl, const Game& game, fx scrollX) const;
+
 private:
     Camera cam{};
 
-    static inline void applyMod(ModId mod, Vec3fx origin, Vec3fx& point);
+    // --- Ship trail (level-space ring buffer) ---
+    struct TrailPt {
+        fx levelX;  // level-space X (advances with scroll)
+        fx y;       // world Y
+        fx z;       // world Z
+    };
 
+    static constexpr int kTrailMax = 48;
+    mutable std::array<TrailPt, kTrailMax> trail_{};
+    mutable int trailCount_ = 0;
+    mutable int trailHead_  = 0;
+
+private:
     // --- Shape constructors ---
     void addShip(DrawList& dl, const Vec3fx& pos, uint16_t color, fx shipY, fx shipVy) const;
 
@@ -29,6 +42,10 @@ private:
 
     void addRightTriPrism(DrawList& dl, const Vec3fx& pos, uint16_t color,
                           ModId mod, const Vec3fx& origin) const;
+
+private:
+    void trailPushLevelPoint(fx levelX, fx y, fx z) const;
+    void trailDraw(DrawList& dl, fx scrollX, uint16_t color) const;
 };
 
 } // namespace gv

@@ -3,9 +3,10 @@
 #include <cstdio>
 #include <cstring>
 
+#include "app/Config.hpp"
+
 namespace gv {
 
-static constexpr uint8_t kLevelHeight = 9;
 static constexpr uint8_t kColumnBytes = 7;
 
 enum class ShapeId : uint8_t {

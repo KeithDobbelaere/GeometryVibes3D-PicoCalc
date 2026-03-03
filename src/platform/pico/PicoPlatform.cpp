@@ -30,6 +30,7 @@ public:
         InputState in{};
         // Minimal gameplay mapping
         in.thrust = kb_.down(KEY_SPACE);
+        in.thrustPressed = kb_.pressed(KEY_SPACE);
 
         // Menu/navigation mapping (already in your InputState)
         in.up    = kb_.down(KEY_UP);

@@ -674,8 +674,8 @@ class EditorApp:
 
         self._draw_grid()
         self._draw_start()
-        self._draw_endcap_ghost()   # (5)
-        self._draw_portal_icon()    # (4)(5)
+        self._draw_endcap_ghost()
+        self._draw_portal_icon()
         self._draw_selection_overlay()
 
     def redraw_cell(self, x: int, y: int) -> None:

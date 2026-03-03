@@ -52,7 +52,7 @@ add_executable(GeometryVibes3D-PicoCalc
 )
 
 pico_set_program_name(GeometryVibes3D-PicoCalc "GeometryVibes3D-PicoCalc")
-pico_set_program_version(GeometryVibes3D-PicoCalc "0.1")
+pico_set_program_version(GeometryVibes3D-PicoCalc "0.3")
 
 # Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(GeometryVibes3D-PicoCalc 0)

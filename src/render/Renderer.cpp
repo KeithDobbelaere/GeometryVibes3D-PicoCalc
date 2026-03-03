@@ -1,6 +1,8 @@
 #include "Renderer.hpp"
 #include "app/Config.hpp"
 #include "game/Game.hpp"
+#include "game/Playfield.hpp"
+#include "game/LevelMath.hpp"
 
 namespace gv {
 
@@ -11,26 +13,6 @@ void Renderer::setCamera(const Camera& c) {
 
 static inline fx fi(int v) { return fx::fromInt(v); }
 
-inline void Renderer::applyMod(ModId mod, Vec3fx origin, Vec3fx& point) {
-    fx ox = origin.x, oy = origin.y, oz = origin.z;
-    fx &x = point.x, &y = point.y, &z = point.z;
-
-    fx dx = x - ox;
-    fx dy = y - oy;
-    fx dz = z - oz;
-
-    switch (mod) {
-        case ModId::None:     break;
-        case ModId::RotLeft:  { fx ndx =  dy; fx ndy = -dx; dx = ndx; dy = ndy; } break;
-        case ModId::RotRight: { fx ndx = -dy; fx ndy =  dx; dx = ndx; dy = ndy; } break;
-        case ModId::Invert:   { dx = -dx; dy = -dy; } break;
-    }
-
-    x = ox + dx;
-    y = oy + dy;
-    z = oz + dz;
-}
-
 static inline Vec3fx add3(const Vec3fx& a, const Vec3fx& b) {
     return Vec3fx{ a.x + b.x, a.y + b.y, a.z + b.z };
 }
@@ -39,42 +21,97 @@ static inline void line3(const Vec3fx& A, const Vec3fx& B, uint16_t color, const
     Vec2i a, b;
     if (projectPoint(cam, A, a) && projectPoint(cam, B, b))
         dl.addLine(a.x, a.y, b.x, b.y, color);
-};
+}
 
-void Renderer::addShip(DrawList& dl, const Vec3fx& pos, uint16_t color, fx shipY, fx shipVy) const
+static inline int iabs(int v) { return v < 0 ? -v : v; }
+
+void Renderer::trailPushLevelPoint(fx levelX, fx y, fx z) const {
+    // A large jump usually indicates a reset/spawn; clearing avoids a long diagonal streak.
+    if (trailCount_ > 0) {
+        const int lastIdx = (trailHead_ - 1 + kTrailMax) % kTrailMax;
+        const TrailPt last = trail_[lastIdx];
+
+        // Compare in screen space (cheap) to detect teleports/resets.
+        Vec2i a{}, b{};
+        Vec3fx wa{ last.levelX - levelX + fx::fromInt(kShipFixedX), last.y, last.z };
+        Vec3fx wb{ fx::fromInt(kShipFixedX), y, z };
+
+        if (projectPoint(cam, wa, a) && projectPoint(cam, wb, b)) {
+            const int dx = iabs(int(b.x) - int(a.x));
+            const int dy = iabs(int(b.y) - int(a.y));
+            if (dx + dy > 120) {
+                trailCount_ = 0;
+                trailHead_ = 0;
+            }
+        }
+    }
+
+    trail_[trailHead_] = TrailPt{ levelX, y, z };
+    trailHead_ = (trailHead_ + 1) % kTrailMax;
+    if (trailCount_ < kTrailMax) ++trailCount_;
+}
+
+void Renderer::trailDraw(DrawList& dl, fx scrollX, uint16_t color) const {
+    if (trailCount_ < 2) return;
+
+    const int start = (trailHead_ - trailCount_ + kTrailMax) % kTrailMax;
+
+    Vec2i prev{};
+    bool havePrev = false;
+
+    for (int i = 0; i < trailCount_; ++i) {
+        const int idx = (start + i) % kTrailMax;
+        const TrailPt tp = trail_[idx];
+
+        // Convert level-space X to render-world X for the current scroll.
+        const fx wx = tp.levelX - scrollX + fx::fromInt(kShipFixedX);
+        Vec3fx w{ wx, tp.y, tp.z };
+
+        Vec2i cur{};
+        if (!projectPoint(cam, w, cur)) {
+            havePrev = false;
+            continue;
+        }
+
+        if (havePrev) {
+            dl.addLine(prev.x, prev.y, cur.x, cur.y, color);
+        }
+        prev = cur;
+        havePrev = true;
+    }
+}
+
+void Renderer::addShip(DrawList &dl, const Vec3fx &pos, uint16_t color, fx shipY, fx shipVy) const
 {
-    // --- size: about half a cell wide ---
-    const fx halfW = fi(kCellSize/4);  // half-width => full width ~ 0.5 cell
-    const fx len   = fi(kCellSize) * fx::fromRatio(9, 20);  // forward length ~ 0.45 cell
-    const fx hz    = fi(kCellSize) * fx::fromRatio(3, 50);  // slight extrusion ~ 0.06 cell
+    // Size is about half a cell wide.
+    const fx halfW = fi(kCellSize/4);
+    const fx len   = fi(kCellSize) * fx::fromRatio(9, 20);
+    const fx hz    = fi(kCellSize) * fx::fromRatio(3, 50);
 
     // Local triangle in XY, pointing straight ahead (+X) when angle = 0.
-    // Tip forward, base behind.
     Vec3fx v0{  len,  fx::zero(), fx::zero() };       // tip
     Vec3fx v1{ -len,  halfW,      fx::zero() };       // base top
     Vec3fx v2{ -len, -halfW,      fx::zero() };       // base bottom
 
-    // Decide if we are clipping into the slabs:
-    const fx playHalfH = fi(9*kCellSize/2); // 45
-    const fx clipZoneStart = playHalfH - halfW;   // within half-width of boundary
-    const fx absY = (shipY.raw() < 0) ? fx::fromRaw(-shipY.raw()) : shipY;
-
+    // Clipping zone is within half-width of the playfield boundary.
+    const fx playHalf = playHalfH();
+    const fx clipZoneStart = playHalf - halfW;
+    const fx absY = abs(shipY);
     const bool clipping = (absY > clipZoneStart);
 
-    // Tilt angle: point up/down only when NOT clipping.
+    // Tilt angle points up/down only when not clipping.
     fx c = fx::one();
     fx s = fx::zero();
 
     if (!clipping) {
-        // cos(45) == sin(45)
-        constexpr fx cos45 = fx::fromRaw(46341); // ~0.70710678118
+        constexpr fx cos45 = fx::fromRaw(46341); // ~0.7071 in Q16.16
         c = cos45;
         if (shipVy.raw() > 0) {
-            s = cos45;   // tilt "up"
+            s = cos45;
         } else if (shipVy.raw() < 0) {
-            s = -cos45;  // tilt "down"
+            s = -cos45;
         } else {
-            s = fx::zero();          // stationary => straight
+            s = fx::zero();
             c = fx::one();
         }
     }
@@ -89,13 +126,13 @@ void Renderer::addShip(DrawList& dl, const Vec3fx& pos, uint16_t color, fx shipY
 
     rotZ(v0); rotZ(v1); rotZ(v2);
 
-    // Extrude in Z
+    // Extrude in Z.
     Vec3fx a0{ v0.x, v0.y, v0.z - hz }, a1{ v1.x, v1.y, v1.z - hz }, a2{ v2.x, v2.y, v2.z - hz };
     Vec3fx b0{ v0.x, v0.y, v0.z + hz }, b1{ v1.x, v1.y, v1.z + hz }, b2{ v2.x, v2.y, v2.z + hz };
 
     auto add = [&](const Vec3fx& p) { return Vec3fx{ pos.x + p.x, pos.y + p.y, pos.z + p.z }; };
 
-    // Wireframe edges
+    // Wireframe edges.
     line3(add(a0), add(a1), color, cam, dl);
     line3(add(a1), add(a2), color, cam, dl);
     line3(add(a2), add(a0), color, cam, dl);
@@ -112,10 +149,10 @@ void Renderer::addShip(DrawList& dl, const Vec3fx& pos, uint16_t color, fx shipY
 void Renderer::addCube(DrawList &dl, const Vec3fx &pos, uint16_t color) const
 {
     const Vec3fx verts[] = {
-        { fi(0),         fi(0),         fi(0)         }, { fi(kCellSize), fi(0),         fi(0)         },
-        { fi(kCellSize), fi(kCellSize), fi(0)         }, { fi(0),         fi(kCellSize), fi(0)         },
-        { fi(0),         fi(0),         fi(kCellSize) }, { fi(kCellSize), fi(0),         fi(kCellSize) },
-        { fi(kCellSize), fi(kCellSize), fi(kCellSize) }, { fi(0),         fi(kCellSize), fi(kCellSize) } 
+        { fx::zero(),    fx::zero(),    fx::zero()    }, { fi(kCellSize), fx::zero(),    fx::zero()    },
+        { fi(kCellSize), fi(kCellSize), fx::zero()    }, { fx::zero(),    fi(kCellSize), fx::zero()    },
+        { fx::zero(),    fx::zero(),    fi(kCellSize) }, { fi(kCellSize), fx::zero(),    fi(kCellSize) },
+        { fi(kCellSize), fi(kCellSize), fi(kCellSize) }, { fx::zero(),    fi(kCellSize), fi(kCellSize) }
     };
 
     const int indices[] = {
@@ -127,7 +164,6 @@ void Renderer::addCube(DrawList &dl, const Vec3fx &pos, uint16_t color) const
     for (size_t i = 0; i < sizeof(indices)/sizeof(indices[0]); i += 2) {
         Vec3fx vA = add3(pos, verts[indices[i]]);
         Vec3fx vB = add3(pos, verts[indices[i+1]]);
-
         line3(vA, vB, color, cam, dl);
     }
 }
@@ -136,11 +172,11 @@ void Renderer::addSquarePyramid(DrawList& dl, const Vec3fx& pos, uint16_t color,
                                 ModId mod, fx apexScale, const Vec3fx& origin) const
 {
     const Vec3fx verts[] = {
-        { fi(kCellSize/2),    (fi(1)-apexScale)*fi(kCellSize), fi(kCellSize/2)    }, // apex
-        { fi(0),              fi(kCellSize),                   fi(kCellSize)      }, // base corner 0
-        { fi(kCellSize),      fi(kCellSize),                   fi(kCellSize)      }, // base corner 1
-        { fi(kCellSize),      fi(kCellSize),                   fi(0)              }, // base corner 2
-        { fi(0),              fi(kCellSize),                   fi(0)              }  // base corner 3
+        { fi(kCellSize/2), apexScale*fi(kCellSize), fi(kCellSize/2) }, // apex
+        { fx::zero(),      fx::zero(),              fi(kCellSize)   }, // base corner 0
+        { fi(kCellSize),   fx::zero(),              fi(kCellSize)   }, // base corner 1
+        { fi(kCellSize),   fx::zero(),              fx::zero()      }, // base corner 2
+        { fx::zero(),      fx::zero(),              fx::zero()      }  // base corner 3
     };
 
     const int indices[] = {
@@ -152,25 +188,24 @@ void Renderer::addSquarePyramid(DrawList& dl, const Vec3fx& pos, uint16_t color,
         Vec3fx vA = add3(pos, verts[indices[i]]);
         Vec3fx vB = add3(pos, verts[indices[i+1]]);
 
-        applyMod(mod, origin, vA);
-        applyMod(mod, origin, vB);
+        applyMod3(mod, origin, vA);
+        applyMod3(mod, origin, vB);
 
         line3(vA, vB, color, cam, dl);
     }
-
 }
 
 void Renderer::addRightTriPrism(DrawList& dl, const Vec3fx& pos, uint16_t color,
                                 ModId mod, const Vec3fx& origin) const
 {
-    // right triangle prism with right angle at botom-right, hypotenuse facing backward:
+    // Right triangle prism with right angle at bottom-right.
     const Vec3fx verts[] = {
-        { fi(kCellSize), fi(0),         fi(0)         }, // front-right-top
-        { fi(kCellSize), fi(kCellSize), fi(0)         }, // front-right-bottom
-        { fi(0),         fi(kCellSize), fi(0)         }, // front-left-bottom
-        { fi(kCellSize), fi(0),         fi(kCellSize) }, // back-right-top
-        { fi(kCellSize), fi(kCellSize), fi(kCellSize) }, // back-right-bottom
-        { fi(0),         fi(kCellSize), fi(kCellSize) }  // back-left-bottom
+        { fi(kCellSize), fi(kCellSize), fx::zero()    }, // front-right-top
+        { fi(kCellSize), fx::zero(),    fx::zero()    }, // front-right-bottom
+        { fx::zero(),    fx::zero(),    fx::zero()    }, // front-left-bottom
+        { fi(kCellSize), fi(kCellSize), fi(kCellSize) }, // back-right-top
+        { fi(kCellSize), fx::zero(),    fi(kCellSize) }, // back-right-bottom
+        { fx::zero(),    fx::zero(),    fi(kCellSize) }  // back-left-bottom
     };
 
     const int indices[] = {
@@ -183,8 +218,8 @@ void Renderer::addRightTriPrism(DrawList& dl, const Vec3fx& pos, uint16_t color,
         Vec3fx vA = add3(pos, verts[indices[i]]);
         Vec3fx vB = add3(pos, verts[indices[i+1]]);
 
-        applyMod(mod, origin, vA);
-        applyMod(mod, origin, vB);
+        applyMod3(mod, origin, vA);
+        applyMod3(mod, origin, vB);
 
         line3(vA, vB, color, cam, dl);
     }
@@ -208,62 +243,55 @@ static inline void rectWireXZ(
 
 void Renderer::buildScene(DrawList& dl, const Game& game, fx scrollX) const
 {
-    const uint16_t kWire  = 0xFFFF; // white
-    const uint16_t kGreen = 0x07E0; // green
+    const uint16_t kWire   = 0xFFFF; // white
+    const uint16_t kGreen  = 0x07E0; // green
+    const uint16_t kShip   = 0xFFFF; // white
+    const uint16_t kCyan   = 0x07FF; // cyan
+    const uint16_t kPurple = 0xF81F; // bright purple
 
-    const fx colStepX = fi(kCellSize);
-
-    // Playfield mapping
-    const fx cellH = fi(kCellSize);
-    const fx playHalfH = fi(9*kCellSize/2); // 45
-    const fx playCenterY = fi(0);
-
-    // ---- Stream + render level ----
     if (!game.hasLevel()) return;
 
     const int levelW = (int)game.levelHeader().width;
 
-    int scrollCol = scrollX.toInt() / colStepX.toInt();
+    int scrollCol = scrollX.toInt() / kCellSize;
     if (scrollCol < 0) scrollCol = 0;
 
-    const int colsVisible = 64;
-    int col0 = scrollCol - 6;
+    int col0 = scrollCol - kColsPadLeft;
     if (col0 < 0) col0 = 0;
-    int col1 = col0 + colsVisible;
+
+    int col1 = col0 + kColsVisible;
     if (col1 > levelW) col1 = levelW;
 
     // ---- Bounds planes (top/bottom of playfield) ----
-    const fx z0 = fi(0);
-    const fx z1 = fi(kCellSize);                 // match obstacle depth
-    const fx yTop = playCenterY + playHalfH;
-    const fx yBot = playCenterY - playHalfH;
-    // Visible X span (pad a bit so it doesn’t pop at edges)
-    const fx xLeft  = mulInt(colStepX, col0) - scrollX + fi(40) - fi(kCellSize * 2);
-    const fx xRight = mulInt(colStepX, col1) - scrollX + fi(40) + fi(kCellSize * 2);
+    const fx z0 = fx::zero();
+    const fx z1 = fi(kCellSize);
+    const fx yTop = playCenterY() + playHalfH();
+    const fx yBot = playCenterY() - playHalfH();
 
-    // Draw top/bottom rectangles
+    const fx xLeft  = fx::fromInt(col0 * kCellSize) - scrollX + fx::fromInt(kShipFixedX) - fi(kCellSize * 2);
+    const fx xRight = fx::fromInt(col1 * kCellSize) - scrollX + fx::fromInt(kShipFixedX) + fi(kCellSize * 2);
+
     rectWireXZ(dl, cam, xLeft, xRight, yTop, z0, z1, kWire);
     rectWireXZ(dl, cam, xLeft, xRight, yBot, z0, z1, kWire);
 
+    // ---- Stream + render level ----
     Column56 col{};
     for (int cx = col0; cx < col1; ++cx) {
         if (!game.readLevelColumn((uint16_t)cx, col))
             continue;
 
-        fx worldX = mulInt(colStepX, cx) - scrollX + fi(40);
+        fx worldX = worldXForColumn(cx, scrollX);
 
-        for (int y = 0; y < kLevelHeight; ++y) {
-            ShapeId sid = col.shape(y);
+        for (int row = 0; row < kLevelHeight; ++row) {
+            ShapeId sid = col.shape(row);
             if (sid == ShapeId::Empty) continue;
 
-            ModId mid = col.mod(y);
+            ModId mid = col.mod(row);
 
-            // Cell center in world space
-            fx worldY = playCenterY - playHalfH + mulInt(cellH, y);
-            fx cz = fi(0);
+            fx worldY = worldYForRow(row);
+            fx cz = fx::zero();
 
-            // Modifier origin: for now, per-cell origin = cell center.
-            // Later: pass a group origin (e.g. start of a motif).
+            // Modifier origin uses per-cell center.
             fx ox = worldX + fi(kCellSize/2);
             fx oy = worldY + fi(kCellSize/2);
 
@@ -285,14 +313,44 @@ void Renderer::buildScene(DrawList& dl, const Game& game, fx scrollX) const
                     break;
 
                 default:
-                    // Unknown shape ids: ignore for now (future-proof)
                     break;
             }
         }
     }
-    // ---- Draw ship (centerline) ----
-    const uint16_t kShip = 0xFFFF; // white for now
-    addShip(dl, Vec3fx{ fi(40), game.ship().y, fi(kCellSize/2) }, kShip, game.ship().y, game.ship().vy);
+
+    // ---- Portal marker cubes ----
+    {
+        const LevelHeaderV1& h = game.levelHeader();
+        const int portalCol = portal_abs_x(h);
+        const int py = (int)h.portalY;
+
+        if (portalCol >= col0 && portalCol < col1) {
+            const fx px = worldXForColumn(portalCol, scrollX);
+            const fx cz = fx::zero();
+
+            for (int dy = -1; dy <= 1; ++dy) {
+                int row = py + dy;
+                if (row < 0) row = 0;
+                if (row > (kLevelHeight - 1)) row = (kLevelHeight - 1);
+
+                const fx pyWorld = worldYForRow(row);
+                addCube(dl, {px, pyWorld, cz}, kPurple);
+            }
+        }
+    }
+
+    // ---- Ship + trail ----
+    const Vec3fx shipPos{ game.shipRenderX(), game.ship().y, fi(kCellSize/2) };
+
+    // Trail is drawn first so the ship sits on top.
+    trailDraw(dl, scrollX, kCyan);
+
+    // Trail samples are stored in level-space so they drift left as scrollX advances.
+    // Ship level-space X is scrollX plus any fly-out offset.
+    const fx shipLevelX = scrollX + (game.shipRenderX() - fx::fromInt(kShipFixedX));
+    trailPushLevelPoint(shipLevelX, game.ship().y, fi(kCellSize/2));
+
+    addShip(dl, shipPos, kShip, game.ship().y, game.ship().vy);
 }
 
 } // namespace gv

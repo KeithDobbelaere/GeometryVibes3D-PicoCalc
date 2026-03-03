@@ -1,29 +1,53 @@
 #include "Game.hpp"
 #include "app/Config.hpp"
+#include "game/Playfield.hpp"
+#include "game/LevelMath.hpp"
+#include <cstring>
 
 namespace {
 
-// Ship position in world space (match renderer: x=40, z = kCellSize/2)
-static inline gv::fx shipWorldZ() { return gv::fx::fromInt(gv::kCellSize / 2); }
-
-// Conservative collision radius: ship is about half-cell wide => half-width = kCellSize/4
-static inline gv::fx shipRadius() { return gv::fx::fromInt(gv::kCellSize / 4); }
-
-// Playfield extents consistent with your centered playfield (-half..+half)
-static inline gv::fx playHalfH() { return gv::fx::fromInt((9 * gv::kCellSize) / 2); }
-
 static inline int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+static inline gv::fx shipWorldZ() { return gv::fx::fromInt(gv::kCellSize / 2); }
+static inline gv::fx shipRadius() { return gv::fx::fromInt(gv::kCellSize / 4); }
 
 } // anon
 
 namespace gv {
 
+bool Game::checkPortalReached(fx shipY) const {
+    if (!hasLevel()) return false;
+
+    const int width = int(levelHdr.width);
+    if (width <= 0) return false;
+
+    const int portalX = (width - 1) + int(levelHdr.portalDx);
+    if (portalX < 0 || portalX >= width) return false;
+
+    // Treat ship level-space X as xScroll (ship is fixed on screen).
+    const int shipCol = xScroll.toInt() / kCellSize;
+
+    if (shipCol < portalX) return false;
+
+    // Convert shipY (world) to row index 0..8 using our shared playfield mapping.
+    int shipRow = rowFromWorldY(shipY);
+
+    const int py = clampi(int(levelHdr.portalY), 0, kLevelHeight - 1);
+
+    // Accept portalY and one cell above/below.
+    return (shipRow >= py - 1) && (shipRow <= py + 1);
+}
+
 void Game::reset() {
     shipState.y  = fx::fromInt(0);
     shipState.vy = fx::fromInt(0);
 
-    xScroll  = fx::fromInt(0);
-    finished = false;
+    runState = RunState::WaitingToStart;
+    flyOutX = fx::zero();
+    hit = false;
+
+    xScroll  = fx::zero();
+    finished_ = false;
 
     unloadLevel();
 }
@@ -31,97 +55,131 @@ void Game::reset() {
 bool Game::loadLevel(const char* path) {
     unloadLevel();
 
-    levelFile = std::fopen(path, "rb");
-    if (!levelFile) return false;
+    if (!fs_) return false;
 
-    if (!read_header(levelFile, levelHdr)) {
+    file_ = fs_->openRead(path);
+    if (!file_) return false;
+
+    size_t got = 0;
+    if (!file_->seek(0)) { unloadLevel(); return false; }
+    if (!file_->read(&levelHdr, sizeof(LevelHeaderV1), got) || got != sizeof(LevelHeaderV1)) {
         unloadLevel();
         return false;
     }
 
-    // Reset runtime state for new level
-    finished = false;
+    if (std::memcmp(levelHdr.magic, "GVL1", 4) != 0) { unloadLevel(); return false; }
+    if (levelHdr.version != 1) { unloadLevel(); return false; }
+    if (levelHdr.height != kLevelHeight) { unloadLevel(); return false; }
+
+    finished_ = false;
     hit = false;
     shipState.vy = fx::zero();
+    flyOutX = fx::zero();
+    runState = RunState::WaitingToStart;
 
     // ---- spawn from header (cell coords) ----
-    const int h = int(levelHdr.height);          // should be 9
+    const int h = int(levelHdr.height);
     const int startY = (h > 0) ? clampi(int(levelHdr.startY), 0, h - 1) : 0;
     const int startX = clampi(int(levelHdr.startX), 0, int(levelHdr.width) - 1);
 
-    // Playfield is centered on y=0, and row 0 is the bottom row.
-    // Our renderer places cell origins at: y0 = -halfH + row*kCellSize
-    const fx halfH = fx::fromInt((h * kCellSize) / 2);    // 9*10/2 = 45
+    // Keep the playfield centered at y=0, and we treat row 0 as the top row
+    // in our current renderer math (worldYForRow does the mapping).
     const fx cellH = fx::fromInt(kCellSize);
 
-    // Place ship at center of the start cell in Y
-    shipState.y = -halfH + mulInt(cellH, startY) + fx::fromInt(kCellSize / 2);
+    // Place the ship at the center of the start cell in Y.
+    const fx rowY0 = worldYForRow(startY);
+    shipState.y = rowY0 + fx::fromInt(kCellSize / 2);
 
-    // Start the scroll so the startX column is under the ship
+    // Start the scroll so the startX column is under the ship.
     xScroll = fx::fromInt(startX * kCellSize);
+
     return true;
 }
 
 void Game::unloadLevel() {
-    if (levelFile) {
-        std::fclose(levelFile);
-        levelFile = nullptr;
+    if (file_) {
+        file_->close();
+        file_ = nullptr;
     }
     std::memset(&levelHdr, 0, sizeof(levelHdr));
 }
 
 bool Game::readLevelColumn(uint16_t i, Column56& out) const {
-    if (!levelFile) return false;
+    if (!file_) return false;
     if (i >= levelHdr.width) return false;
-    return read_column(levelFile, i, out);
+
+    const size_t offset = 16u + size_t(i) * size_t(kColumnBytes);
+    if (!file_->seek(offset)) return false;
+
+    size_t got = 0;
+    if (!file_->read(out.b, kColumnBytes, got)) return false;
+    return got == kColumnBytes;
 }
 
 void Game::update(const InputState& in, fx dt) {
-    const fx speedY = fx::fromInt(80);
-    shipState.vy = in.thrust ? -speedY : speedY;
-    shipState.y = shipState.y + shipState.vy * dt;
-    
-    const fx playHalfH = fx::fromInt((9 * kCellSize)/2);
+    const fx halfH = playHalfH();
 
-    if (shipState.y < -playHalfH) shipState.y = -playHalfH;
-    if (shipState.y >  playHalfH) shipState.y =  playHalfH;
+    // ---- waiting ----
+    if (runState == RunState::WaitingToStart) {
+        shipState.vy = fx::zero();
 
-    if (!finished) {
-        const fx scrollSpeed = fx::fromInt(90); // world units/sec (tweak)
-        xScroll = xScroll + scrollSpeed * dt;
+        shipState.y = clamp(shipState.y, -halfH, halfH);
 
-        if (!hit && hasLevel()) {
-            hit = checkCollisionAt(shipState.y);
-            if (hit) {
-                // Freeze scroll (or set a "dead" state later)
-                finished = true;
-            }
+        if (in.thrustPressed) {
+            runState = RunState::Running;
         }
+        return;
+    }
 
-        // Use level width if loaded; else keep old fallback.
-        const int widthCols = levelFile ? int(levelHdr.width) : 332;
-        const fx testLength = fx::fromInt(widthCols * gv::kCellSize);
+    // ---- finished fly-out ----
+    if (runState == RunState::FinishedFlyOut) {
+        if (finished_) return;
+        // Keep scrolling the world and push the ship forward off-screen.
+        xScroll = xScroll + kScrollSpeed * dt;
+        flyOutX = flyOutX + kFlyOutSpeed * dt;
 
-        if (xScroll >= testLength) {
-            xScroll = testLength;
-            finished = true;
+        if (flyOutX >= kFlyOutCells) {
+            finished_ = true;
+        }
+        return;
+    }
+
+    // ---- running ----
+    const fx speedY = fx::fromInt(80);
+    shipState.vy = in.thrust ? speedY : -speedY;
+    shipState.y = shipState.y + shipState.vy * dt;
+
+    shipState.y = clamp(shipState.y, -halfH, halfH);
+
+    if (runState == RunState::Dead) return;
+
+    // Scroll
+    xScroll = xScroll + kScrollSpeed * dt;
+
+    // Check portal completion before obstacle hit so portal "wins" if both happen together.
+    if (checkPortalReached(shipState.y)) {
+        runState = RunState::FinishedFlyOut;
+        shipState.vy = fx::zero();
+        return;
+    }
+
+    // Obstacle collision
+    if (!hit && hasLevel()) {
+        hit = checkCollisionAt(shipState.y);
+        if (hit) {
+            runState = RunState::Dead;
+            finished_ = true;
+            return;
         }
     }
 }
 
-bool Game::checkCollisionAt(fx shipY) const
-{
-    const fx shipX = fx::fromInt(40);                 // world space (matches renderer)
+bool Game::checkCollisionAt(fx shipY) const {
     const fx sy = shipY;
-    const fx sz = shipWorldZ();                       // still kCellSize/2
+    const fx sz = shipWorldZ();
     const fx r  = shipRadius();
 
-    const fx k = fx::fromInt(kCellSize);
-    const fx halfH = playHalfH();
-
     // ---- X: columns overlapped at the ship's position ----
-    // In render-space: ship is fixed, world shifts by scrollX.
-    // Collision with column c occurs when scrollX is near c*k.
     const fx x0 = xScroll - r;
     const fx x1 = xScroll + r;
 
@@ -136,24 +194,18 @@ bool Game::checkCollisionAt(fx shipY) const
     if (colB > maxCol) colB = maxCol;
 
     // ---- Y: rows overlapped by radius ----
-    const fx y0 = sy - r;
-    const fx y1w = sy + r;
+    const fx yLow  = sy - r;
+    const fx yHigh = sy + r;
 
-    int rowA = (y0 + halfH).toInt() / kCellSize;
-    int rowB = (y1w + halfH).toInt() / kCellSize;
-    rowA = clampi(rowA, 0, kLevelHeight - 1);
-    rowB = clampi(rowB, 0, kLevelHeight - 1);
+    int rowA = rowFromWorldY(yHigh);
+    int rowB = rowFromWorldY(yLow);
+    if (rowA > rowB) { int t = rowA; rowA = rowB; rowB = t; }
 
     Column56 col{};
     for (int c = colA; c <= colB; ++c) {
         if (!readLevelColumn((uint16_t)c, col)) continue;
 
-        const fx colX0 = fx::fromInt(c * kCellSize);
-
-        // Local X inside this column cell is based on scroll position (NOT shipX)
-        // Because worldX(cell) = colX0 - scrollX + 40, and shipX = 40:
-        // lx = shipX - worldX(cell) = scrollX - colX0
-        const fx lx = xScroll - colX0;
+        const fx lx = localXInColumn(xScroll, c);
 
         for (int row = rowA; row <= rowB; ++row) {
             const ShapeId sid = col.shape(row);
@@ -161,10 +213,9 @@ bool Game::checkCollisionAt(fx shipY) const
 
             const ModId mid = col.mod(row);
 
-            const fx rowY0 = -halfH + fx::fromInt(row * kCellSize);
-
-            const fx ly = sy - rowY0;
-            const fx lz = sz; // z0=0 for cells
+            const fx rowY0 = worldYForRow(row);
+            const fx ly = sy - rowY0; // local Y in [0..k] when inside cell
+            const fx lz = sz;
 
             if (collideCell(sid, mid, lx, ly, lz, r))
                 return true;
@@ -174,103 +225,60 @@ bool Game::checkCollisionAt(fx shipY) const
     return false;
 }
 
-void Game::unapplyMod(ModId mod, fx ox, fx oy, fx &x, fx &y)
-{
-    fx dx = x - ox;
-    fx dy = y - oy;
-
-    switch (mod) {
-        case ModId::None:
-            break;
-        case ModId::RotLeft: {
-            // inverse is RotRight: (dx,dy) = ( dy, -dx )
-            fx ndx =  dy;
-            fx ndy = -dx;
-            dx = ndx; dy = ndy;
-        } break;
-        case ModId::RotRight: {
-            // inverse is RotLeft: (dx,dy) = ( -dy, dx )
-            fx ndx = -dy;
-            fx ndy =  dx;
-            dx = ndx; dy = ndy;
-        } break;
-        case ModId::Invert:
-            dx = -dx, dy = -dy;
-            break;
-    }
-
-    x = ox + dx;
-    y = oy + dy;
-}
-
-bool Game::collideCell(ShapeId sid, ModId mid, fx lx, fx ly, fx lz, fx r)
-{
+bool Game::collideCell(ShapeId sid, ModId mid, fx lx, fx ly, fx lz, fx r) {
     const fx k = fx::fromInt(kCellSize);
 
-    // Quick reject: if we're not even near the cell AABB (expanded by r), no collision.
+    // Do a quick expanded AABB reject.
     if (lx < -r || lx > k + r) return false;
     if (ly < -r || ly > k + r) return false;
     if (lz < -r || lz > k + r) return false;
 
+    // Full cube occupies the whole cell volume.
     if (sid == ShapeId::Square) {
-        // Full cube occupies entire cell volume.
         return true;
     }
 
-    // Work in XY canonical space by unapplying mod around cell center.
+    // Unapply rotation/invert in XY around the cell center so we can test in a canonical space.
     fx x = lx;
     fx y = ly;
     const fx ox = fx::fromInt(kCellSize / 2);
     const fx oy = fx::fromInt(kCellSize / 2);
-    unapplyMod(mid, ox, oy, x, y);
+    unapplyMod2(mid, ox, oy, x, y);
 
-    // Z unaffected by mod in your renderer.
-    fx z = lz;
+    const fx z = lz;
 
-    // Right triangle prism:
-    // Your canonical verts use triangle in XY with vertices (k,0), (k,k), (0,k), extruded in Z [0..k].
-    // Inside triangle iff x+y >= k (and within [0..k]).
+    // ---- Right triangle prism ----
+    // Canonical triangle verts: (0,0), (k,0), (k,k)
+    // Inside triangle iff 0<=x<=k, 0<=y<=k, and y <= x.
     if (sid == ShapeId::RightTri) {
-        // Require Z within bounds too
         if (z < -r || z > k + r) return false;
-
-        // Clamp to [0..k] to avoid nonsense from the expanded AABB
-        // Use an expanded inequality for r (conservative):
-        // x + y >= k - r
-        if (x < -r || x > k + r) return false;
-        if (y < -r || y > k + r) return false;
-
-        return (x + y) >= (k - r);
+        return y <= (x + r);
     }
 
-    // Square pyramid (FullSpike/HalfSpike):
-    // Apex at (k/2, (1-apexScale)*k, k/2), base at y=k.
-    // Cross-section square shrinks linearly toward apex.
+    // ---- Square pyramid (FullSpike/HalfSpike) ----
     if (sid == ShapeId::FullSpike || sid == ShapeId::HalfSpike) {
         const fx apexScale = (sid == ShapeId::FullSpike) ? fx::one() : fx::half();
-        const fx apexY = (fx::one() - apexScale) * k; // Full:0, Half:0.5k
+        const fx apexY = apexScale * k;
 
-        // If we're above apex or below base (expanded), reject.
-        if (y < apexY - r || y > k + r) return false;
+        if (apexY.raw() <= 0) return false;
 
-        // Normalize t from apex->base: t=0 at apex, t=1 at base
-        // t = (y - apexY) / (k - apexY)
-        const fx denom = (k - apexY);
-        if (denom.raw() == 0) return false;
+        if (y < -r || y > apexY + r) return false;
 
-        fx t = (y - apexY) / denom;
+        // Compute t = 1 at base (y=0), t = 0 at apex (y=apexY).
+        fx t = (apexY - y) / apexY;
 
-        // Half-extent in X/Z at that height: (k/2) * t
         const fx half = fx::fromInt(kCellSize / 2);
         fx extent = half * t;
 
-        // Pyramid centered at (k/2, *, k/2)
         const fx cx = half;
         const fx cz = half;
 
-        // Inflate by r (conservative)
-        if ((x - cx) < -(extent + r) || (x - cx) > (extent + r)) return false;
-        if ((z - cz) < -(extent + r) || (z - cz) > (extent + r)) return false;
+        // Inflate by r to stay conservative.
+        fx dx = x - cx;
+        fx dz = z - cz;
+
+        if (dx < -(extent + r) || dx > (extent + r)) return false;
+        if (dz < -(extent + r) || dz > (extent + r)) return false;
 
         return true;
     }

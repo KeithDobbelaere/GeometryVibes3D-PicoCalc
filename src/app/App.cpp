@@ -1,4 +1,5 @@
 #include "App.hpp"
+#include "app/Config.hpp"
 
 namespace gv {
 
@@ -10,7 +11,6 @@ int App::run(IPlatform& platform) {
 
     init(*plat, plat->display().width(), plat->display().height());
 
-    int frames = 0;
     while (true) {
         uint32_t dt = plat->dtUs();
         InputState in = plat->pollInput();
@@ -25,22 +25,23 @@ int App::run(IPlatform& platform) {
 }
 
 void App::init(IPlatform& platform, int screenW, int screenH) {
-    (void)platform;
-    w = screenW; h = screenH;
+    w = screenW;
+    h = screenH;
 
     game.reset();
+    game.setFileSystem(&platform.fs());
 
-    // Load first level (ignore failure for now; you can add on-screen indicator later)
-    (void)game.loadLevel("levels/L01.BIN");
+    // Load the first level (ignore failure for now; we can add an on-screen indicator later).
+    (void)game.loadLevel("levels/L02.BIN");
 
     Camera cam{};
-    cam.focal = fx::fromInt(180);
+    cam.focal = kDefaultFocal;
     cam.cx = fx::fromInt(w / 2);
     cam.cy = fx::fromInt(h / 2);
 
-    cam.pos    = Vec3fx{ fx::fromInt(-20), fx::fromInt(20), fx::fromInt(120) };
-    cam.target = Vec3fx{ fx::fromInt(40),  fx::fromInt(0),  fx::fromInt(0) };
-    cam.up     = Vec3fx{ fx::fromInt(0),   fx::fromInt(1),  fx::fromInt(0) };
+    cam.pos    = Vec3fx{ fx::fromInt(kCamPosX), fx::fromInt(kCamPosY), fx::fromInt(kCamPosZ) };
+    cam.target = Vec3fx{ fx::fromInt(kCamTgtX), fx::fromInt(kCamTgtY), fx::fromInt(kCamTgtZ) };
+    cam.up     = Vec3fx{ fx::fromInt(0),        fx::fromInt(1),        fx::fromInt(0) };
 
     renderer.setCamera(cam);
 }
@@ -51,19 +52,18 @@ void App::tick(const InputState& in, uint32_t dtUs) {
 
     Camera cam = renderer.camera();
 
-    // Camera follows ship vertically (world shifts up/down like the original).
-    // Move both pos.y and target.y to avoid changing pitch.
-    const fx follow = fx::fromRatio(3, 20); // 0.15
-    const fx yOff = game.ship().y * follow;
+    // We follow the ship vertically by moving both pos.y and target.y so we don't change pitch.
+    const fx yOff = game.ship().y * kCameraFollow;
 
     cam.pos.y    = fx::fromInt(22) + yOff;
     cam.target.y = fx::fromInt(0)  + yOff;
 
-    cam.pos.x    = fx::fromInt(-20);
-    cam.target.x = fx::fromInt(40);
+    // We keep my other camera axes locked for now.
+    cam.pos.x    = fx::fromInt(kCamPosX);
+    cam.target.x = fx::fromInt(kCamTgtX);
 
-    cam.pos.z    = fx::fromInt(120);
-    cam.target.z = fx::fromInt(0);
+    cam.pos.z    = fx::fromInt(kCamPosZ);
+    cam.target.z = fx::fromInt(kCamTgtZ);
 
     renderer.setCamera(cam);
 

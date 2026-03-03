@@ -8,7 +8,6 @@ namespace gv {
 
 class App {
 public:
-    // Owns init + main loop
     int run(IPlatform& platform);
 
 private:
