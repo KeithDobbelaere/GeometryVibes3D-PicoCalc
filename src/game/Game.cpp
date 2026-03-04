@@ -29,7 +29,7 @@ bool Game::checkPortalReached(fx shipY) const {
 
     if (shipCol < portalX) return false;
 
-    // Convert shipY (world) to row index 0..8 using our shared playfield mapping.
+    // Convert shipY (world) to row index 0..8 using shared playfield mapping.
     int shipRow = rowFromWorldY(shipY);
 
     const int py = clampi(int(levelHdr.portalY), 0, kLevelHeight - 1);
@@ -81,10 +81,6 @@ bool Game::loadLevel(const char* path) {
     const int h = int(levelHdr.height);
     const int startY = (h > 0) ? clampi(int(levelHdr.startY), 0, h - 1) : 0;
     const int startX = clampi(int(levelHdr.startX), 0, int(levelHdr.width) - 1);
-
-    // Keep the playfield centered at y=0, and we treat row 0 as the top row
-    // in our current renderer math (worldYForRow does the mapping).
-    const fx cellH = fx::fromInt(kCellSize);
 
     // Place the ship at the center of the start cell in Y.
     const fx rowY0 = worldYForRow(startY);

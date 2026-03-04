@@ -30,6 +30,9 @@ void PicoFile::close() {
         std::fclose(f_);
         f_ = nullptr;
     }
+
+    // This file wrapper is heap-allocated by PicoFileSystem::openRead().
+    delete this;
 }
 
 bool PicoFileSystem::init() {
@@ -48,14 +51,11 @@ bool PicoFileSystem::init() {
 IFile* PicoFileSystem::openRead(const char* path) {
     if (!inited_) return nullptr;
 
-    // close any previous file (single-file for now)
-    file_.close();
-
     FILE* f = std::fopen(path, "rb");
     if (!f) return nullptr;
 
-    file_ = PicoFile(f); // rebind wrapper
-    return &file_;
+    // Each open returns a distinct wrapper so multiple files can be open concurrently.
+    return new PicoFile(f);
 }
 
 } // namespace gv
