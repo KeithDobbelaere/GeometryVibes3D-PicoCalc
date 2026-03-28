@@ -4,7 +4,6 @@
 #include "render/Colors.hpp"
 #include <cstdio>
 
-
 namespace gv {
     
 namespace {
@@ -148,9 +147,13 @@ int App::run(IPlatform* platform) {
             display.beginFrame();
             currentState_->render(*this, frame_);
             if (xipProfilingEnabled_) {
-                xipProfileStats_ = xipProfileEndFrame();
+                xipProfileFrameStats_ = xipProfileEndFrame();
+                xipProfileHistory_.push_back(xipProfileFrameStats_);
+                xipProfileStats_ = averageXipStats(xipProfileHistory_);
             } else {
+                xipProfileFrameStats_ = XipProfileStats{};
                 xipProfileStats_ = XipProfileStats{};
+                xipProfileHistory_.clear();
             }
 
             if (plat_->serialOutputEnabled()) {
@@ -408,7 +411,35 @@ bool App::collectStar(std::size_t levelIndex, uint8_t starIndex) {
     return saveSaves();
 }
 
-void App::changeState(IAppState& next) {
+const XipProfileStats App::averageXipStats(const StaticQueue<XipProfileStats, kXipAverageWindow> &history)
+{
+    XipProfileStats avg{};
+    if (history.empty()) {
+        return avg;
+    }
+    
+    uint64_t accesses = 0;
+    uint64_t hits = 0;
+    uint64_t misses = 0;
+    uint64_t hitPercent = 0;
+
+    for (const auto& s : history) {
+        accesses += s.accesses;
+        hits += s.hits;
+        misses += s.misses;
+        hitPercent += s.hitPercent;
+    }
+
+    const uint32_t count = static_cast<uint32_t>(history.size());
+    avg.accesses = static_cast<uint32_t>(accesses / count);
+    avg.hits = static_cast<uint32_t>(hits / count);
+    avg.misses = static_cast<uint32_t>(misses / count);
+    avg.hitPercent = static_cast<uint32_t>(hitPercent / count);
+    return avg;
+}
+
+void App::changeState(IAppState &next)
+{
     if (currentState_ == &next) {
         return;
     }

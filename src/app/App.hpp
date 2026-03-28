@@ -8,6 +8,7 @@
 #include "StatusOverlay.hpp"
 #include "IAppState.hpp"
 #include "SaveData.hpp"
+#include "core/StaticQueue.hpp"
 
 #include "TitleState.hpp"
 #include "HomeMenuState.hpp"
@@ -26,6 +27,8 @@ namespace gv {
 
 class App {
 public:
+    static constexpr std::size_t kXipAverageWindow = 30;
+
     struct LevelEntry {
         const char* name;
         const char* path;
@@ -94,7 +97,7 @@ public:
 
     bool xipProfilingEnabled() const { return xipProfilingEnabled_; }
     void setXipProfilingEnabled(bool enabled) { xipProfilingEnabled_ = enabled; }
-
+    const XipProfileStats averageXipStats(const StaticQueue<XipProfileStats, kXipAverageWindow>& history);
     const XipProfileStats& xipProfileStats() const { return xipProfileStats_; }
 
     void changeState(IAppState& next);
@@ -136,11 +139,13 @@ private:
     int h_ = 0;
     
     // Core app data
-    Game game_{};
+    Game game_{}; 
     StatusOverlay statusOverlay_{};
     SaveData saveData_{};
     bool xipProfilingEnabled_ = false;
     XipProfileStats xipProfileStats_{};
+    XipProfileStats xipProfileFrameStats_{};
+    StaticQueue<XipProfileStats, kXipAverageWindow> xipProfileHistory_{};
     
     // Runtime save/progression state
     std::size_t selectedLevel_ = 0;
