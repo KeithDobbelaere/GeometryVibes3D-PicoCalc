@@ -9,6 +9,7 @@ namespace gv {
 
 class OptionsState final : public IAppState {
 public:
+    const char* name() const override { return "Options"; }
     void onEnter(App& app) override;
 
     void update(App& app, const InputState& in, uint32_t dtUs) override;
@@ -18,6 +19,7 @@ private:
     enum Item : std::size_t {
         SerialOutput = 0,
         HighlightCollision,
+        XipProfiling,
         Count
     };
 

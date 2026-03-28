@@ -1,6 +1,7 @@
 #pragma once
 
 #include "platform/IPlatform.hpp"
+#include "platform/XipProfile.hpp"
 #include "game/Game.hpp"
 #include "game/Difficulty.hpp"
 #include "render/RenderList.hpp"
@@ -91,6 +92,11 @@ public:
     uint8_t collectedStarsForLevel(std::size_t levelIndex) const;
     bool collectStar(std::size_t levelIndex, uint8_t starIndex);
 
+    bool xipProfilingEnabled() const { return xipProfilingEnabled_; }
+    void setXipProfilingEnabled(bool enabled) { xipProfilingEnabled_ = enabled; }
+
+    const XipProfileStats& xipProfileStats() const { return xipProfileStats_; }
+
     void changeState(IAppState& next);
     void showTitle();
     void showHomeMenu();
@@ -106,6 +112,7 @@ private:
     void init(IPlatform& platform);
     InputState pollInput() const;
     void clearActiveSaveState();
+    void emitAppSerial() const;
 
 private:
     static constexpr LevelEntry kLevels[] = {
@@ -132,6 +139,8 @@ private:
     Game game_{};
     StatusOverlay statusOverlay_{};
     SaveData saveData_{};
+    bool xipProfilingEnabled_ = false;
+    XipProfileStats xipProfileStats_{};
     
     // Runtime save/progression state
     std::size_t selectedLevel_ = 0;

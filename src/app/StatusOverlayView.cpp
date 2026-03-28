@@ -53,9 +53,12 @@ void appendTo(RenderList& rl,
         y = screenH - kLineStep - kBottomMargin;
     }
 
+    const int footerW = int(std::strlen(footerText.c_str())) * kGlyphW;
+    const int footerX = (screenW - footerW) / 2;
+
     rl.addText(
         &footerText,
-        (int16_t)kPanelX,
+        (int16_t)footerX,
         (int16_t)y,
         kFooter,
         255,
@@ -63,6 +66,19 @@ void appendTo(RenderList& rl,
         0,
         TextStyle::Background
     );
+
+    if (overlay.hasFooterLeft()) {
+        rl.addText(
+            &overlay.footerLeftText(),
+            (int16_t)kPanelX,
+            (int16_t)y,
+            overlay.footerLeftColor(),
+            255,
+            false,
+            0,
+            TextStyle::Background
+        );
+    }
 
     if (overlay.hasFooterRight()) {
         const char* s = overlay.footerRightText().c_str();

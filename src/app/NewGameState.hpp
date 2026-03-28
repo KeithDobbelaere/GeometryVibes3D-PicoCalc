@@ -9,6 +9,7 @@ namespace gv {
 
 class NewGameState final : public IAppState {
 public:
+    const char* name() const override { return "NewGame"; }
     void onEnter(App& app) override;
 
     void update(App& app, const InputState& in, uint32_t dtUs) override;

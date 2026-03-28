@@ -12,6 +12,7 @@ namespace gv {
 
 class TitleState final : public IAppState {
 public:
+    const char* name() const override { return "Title"; }
     void onEnter(App& app) override;
     void onExit(App& app) override;
 

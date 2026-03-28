@@ -60,6 +60,7 @@ add_executable(GeometryVibes3D-PicoCalc
     src/platform/pico/PicoPlatform.cpp
     src/platform/pico/PicoFileSystem.cpp
     src/platform/pico/Ili9488Display.cpp
+    src/platform/pico/XipProfile.cpp
 
     src/platform/pico/drivers/clib.c
     src/platform/pico/drivers/fat32.c

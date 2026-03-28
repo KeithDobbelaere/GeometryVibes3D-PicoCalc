@@ -5,6 +5,7 @@ namespace gv {
 
 void StatusOverlay::clear() {
     lines_.clear();
+    clearFooterLeft();
     clearFooterRight();
 }
 
@@ -48,9 +49,27 @@ bool StatusOverlay::addError(const char* s) {
     return addMessage(s, gv::color::Red);
 }
 
+void StatusOverlay::setFooterLeft(const char* s, uint16_t color565) {
+    footerLeft_.color565 = color565;
+
+    if (s && *s) {
+        footerLeft_.text.setText(s);
+        hasFooterLeft_ = true;
+    } else {
+        footerLeft_.text.clear();
+        hasFooterLeft_ = false;
+    }
+}
+
+void StatusOverlay::clearFooterLeft() {
+    footerLeft_.text.clear();
+    footerLeft_.color565 = gv::color::White;
+    hasFooterLeft_ = false;
+}
+
 void StatusOverlay::setFooterRight(const char* s, uint16_t color565) {
     footerRight_.color565 = color565;
-    
+
     if (s && *s) {
         footerRight_.text.setText(s);
         hasFooterRight_ = true;

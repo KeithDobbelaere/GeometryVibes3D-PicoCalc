@@ -27,6 +27,13 @@ void OptionsState::rebuildTexts(App& app) {
         app.game().collisionHighlightEnabled() ? "ON" : "OFF"
     );
     items_[HighlightCollision].setText(buf);
+    
+    std::snprintf(
+        buf, sizeof(buf),
+        "XIP profiling: %s",
+        app.xipProfilingEnabled() ? "ON" : "OFF"
+    );
+    items_[XipProfiling].setText(buf);
 }
 
 void OptionsState::update(App& app, const InputState& in, uint32_t dtUs) {
@@ -51,6 +58,10 @@ void OptionsState::update(App& app, const InputState& in, uint32_t dtUs) {
 
             case HighlightCollision:
                 app.game().setCollisionHighlightEnabled(!app.game().collisionHighlightEnabled());
+                break;
+
+            case XipProfiling:
+                app.setXipProfilingEnabled(!app.xipProfilingEnabled());
                 break;
 
             default:

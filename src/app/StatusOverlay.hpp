@@ -24,6 +24,9 @@ public:
     bool addWarning(const char* s);
     bool addError(const char* s);
 
+    void setFooterLeft(const char* s, uint16_t color565 = gv::color::White);
+    void clearFooterLeft();
+
     void setFooterRight(const char* s, uint16_t color565 = gv::color::White);
     void clearFooterRight();
 
@@ -31,10 +34,14 @@ public:
     void hide() { visible_ = false; }
     void toggleVisible() { visible_ = !visible_; }
 
-    bool visible() const { return visible_ && (!lines_.empty() || hasFooterRight_); }
-    bool empty() const { return lines_.empty() && !hasFooterRight_; }
+    bool visible() const { return visible_ && (!lines_.empty() || hasFooterLeft_ || hasFooterRight_); }
+    bool empty() const { return lines_.empty() && !hasFooterLeft_ && !hasFooterRight_; }
 
     const gv::StaticVector<OverlayLine, LINE_CAP>& lines() const { return lines_; }
+
+    const Text& footerLeftText() const { return footerLeft_.text; }
+    uint16_t footerLeftColor() const { return footerLeft_.color565; }
+    bool hasFooterLeft() const { return hasFooterLeft_; }
 
     const Text& footerRightText() const { return footerRight_.text; }
     uint16_t footerRightColor() const { return footerRight_.color565; }
@@ -42,7 +49,9 @@ public:
 
 private:
     gv::StaticVector<OverlayLine, LINE_CAP> lines_{};
+    OverlayLine footerLeft_{};
     OverlayLine footerRight_{};
+    bool hasFooterLeft_ = false;
     bool hasFooterRight_ = false;
     bool visible_ = false;
 };

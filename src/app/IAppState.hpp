@@ -12,6 +12,7 @@ struct InputState;
 class IAppState {
 public:
     virtual ~IAppState() = default;
+    virtual const char* name() const = 0;
 
     virtual void onEnter(App& app) { (void)app; }
     virtual void onExit(App& app) { (void)app; }

@@ -9,6 +9,7 @@ namespace gv {
 
 class SavedGamesState final : public IAppState {
 public:
+    const char* name() const override { return "Saves"; }
     void onEnter(App& app) override;
 
     void update(App& app, const InputState& in, uint32_t dtUs) override;

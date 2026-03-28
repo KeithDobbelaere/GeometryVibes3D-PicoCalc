@@ -6,12 +6,32 @@
 
 
 namespace gv {
-
-namespace {
     
+namespace {
+        
 constexpr uint32_t kFrameUs = 33333;      // ~30 FPS
 constexpr uint32_t kBatteryPollUs = 2000000; // 2 seconds
+constexpr uint32_t kAppSerialUs = 1000000; // 1 second
 
+inline void updateXipFooter(gv::StatusOverlay& overlay,
+                            bool enabled,
+                            const gv::XipProfileStats& stats) {
+    if (!enabled) {
+        overlay.clearFooterLeft();
+        return;
+    }
+
+    char buf[24];
+    std::snprintf(
+        buf, sizeof(buf),
+        "XIP %u%% M%u",
+        unsigned(stats.hitPercent),
+        unsigned(stats.misses)
+    );
+
+    overlay.setFooterLeft(buf, gv::color::Gray);
+}
+    
 struct BatteryFooterCache {
     uint32_t accumUs = kBatteryPollUs; // force immediate first update
     uint8_t level = 0;
@@ -88,6 +108,7 @@ int App::run(IPlatform* platform) {
     init(*plat_);
 
     uint32_t accumUs = 0;
+    uint32_t appSerialAccumUs = 0;
     BatteryFooterCache batteryCache{};
 
     while (true) {
@@ -111,16 +132,40 @@ int App::run(IPlatform* platform) {
         if (currentState_) {
             currentState_->update(*this, in, kFrameUs);
             auto& display = plat_->display();
+
             updateBatteryFooter(statusOverlay_, *plat_, batteryCache, kFrameUs);
+
             if (currentState_->rendersDirectly()) {
+                updateXipFooter(statusOverlay_, xipProfilingEnabled_, xipProfileStats_);
                 currentState_->renderDirect(*this, display);
                 continue;
             }
+
+            if (xipProfilingEnabled_) {
+                xipProfileBeginFrame();
+            }
+
             display.beginFrame();
             currentState_->render(*this, frame_);
+            if (xipProfilingEnabled_) {
+                xipProfileStats_ = xipProfileEndFrame();
+            } else {
+                xipProfileStats_ = XipProfileStats{};
+            }
+
+            if (plat_->serialOutputEnabled()) {
+                appSerialAccumUs += kFrameUs;
+                if (appSerialAccumUs >= kAppSerialUs) {
+                    appSerialAccumUs = 0;
+                    emitAppSerial();
+                }
+            }
+
+            updateXipFooter(statusOverlay_, xipProfilingEnabled_, xipProfileStats_);
+
             StatusOverlayView::appendTo(frame_, statusOverlay_, display.width(), display.height());
             display.draw(frame_);
-            display.endFrame();         
+            display.endFrame();
         }
     }
 
@@ -442,6 +487,32 @@ void App::clearActiveSaveState() {
     selectedDifficulty_ = Difficulty::Rookie;
     unlockedLevelCount_ = 1;
     selectedLevel_ = 0;
+}
+
+void App::emitAppSerial() const {
+    char buf[128]{};
+    const char* stateName = currentState_ ? currentState_->name() : "None";
+    if (xipProfilingEnabled()) {
+        const auto& x = xipProfileStats();
+        std::snprintf(
+            buf, sizeof(buf),
+            "APP State: %s Level: %u XIP: %u%% A:%u M:%u",
+            stateName,
+            unsigned(selectedLevel() + 1),
+            unsigned(x.hitPercent),
+            unsigned(x.accesses),
+            unsigned(x.misses)
+        );
+    } else {
+        std::snprintf(
+            buf, sizeof(buf),
+            "APP State: %s Level: %u",
+            stateName,
+            unsigned(selectedLevel() + 1)
+        );
+    }
+
+    std::printf("%s\n", buf);
 }
 
 void App::init(IPlatform& platform) {
