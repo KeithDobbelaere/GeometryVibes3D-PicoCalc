@@ -29,9 +29,6 @@ struct fx {
         return fromRaw((int32_t)(((int64_t)num << SHIFT) / den));
     }
 
-    // Integer square root of a 32-bit unsigned value.
-    static uint32_t isqrt32(uint32_t x);
-
     // ---- conversions ----
     constexpr int32_t raw() const { return v; }
     constexpr int32_t toInt() const { return v >> SHIFT; }

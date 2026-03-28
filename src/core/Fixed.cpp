@@ -47,6 +47,8 @@ static constexpr int32_t kCosLut[kTrigSize] = {
 
 static inline fx cosTurnsLut(fx turns) {
     const uint32_t raw = uint32_t(turns.raw());
+
+    // Use the high bits as the LUT index and the low bits as the lerp fraction.
     const int idx = int((raw >> kFracBits) & kTrigMask);
     const int next = (idx + 1) & kTrigMask;
     const uint32_t fracMask = (1u << kFracBits) - 1u;
@@ -54,9 +56,9 @@ static inline fx cosTurnsLut(fx turns) {
 
     const int32_t a = kCosLut[idx];
     const int32_t b = kCosLut[next];
-    const int32_t delta = b - a;
 
-    return fx::fromRaw(a + ((delta * fracRaw) >> kFracBits));
+    // Linear interpolation between a and b.
+    return fx::fromRaw(a + (((b - a) * fracRaw) >> kFracBits));
 }
 
 } // namespace
