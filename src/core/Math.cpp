@@ -1,6 +1,6 @@
 #include "core/Math.hpp"
 #include "Math.hpp"
-
+#include <cmath>
 namespace gv {
 
 static inline uint32_t isqrt_cpp_impl(uint32_t x) {
@@ -9,11 +9,11 @@ static inline uint32_t isqrt_cpp_impl(uint32_t x) {
 
     int start = 0;
     if ((x >> 8) == 0) {
-        start = 12;
+        start = 24;
     } else if ((x >> 16) == 0) {
-        start = 8;
+        start = 16;
     } else if ((x >> 24) == 0) {
-        start = 4;
+        start = 8;
     }
 
     for (int shift = start; shift <= 30; shift += 2) {
@@ -31,7 +31,10 @@ static inline uint32_t isqrt_cpp_impl(uint32_t x) {
     return acc & 0x3fffffffu;
 }
 
-uint32_t isqrt32(uint32_t x) {
+uint16_t isqrt32(uint32_t x) {
+
+    if (__builtin_constant_p(x))
+        return (uint16_t)sqrt((double)x);
 #if defined(__GNUC__) && (defined(__arm__) || defined(__thumb__))
     uint32_t r0 = x;
     uint32_t r2 = 3u << 30;
@@ -39,16 +42,16 @@ uint32_t isqrt32(uint32_t x) {
     int start = 0;
 
     if ((r0 >> 8) == 0) {
-        start = 4 * 3;
+        start = 24;
     } else if ((r0 >> 16) == 0) {
-        start = 4 * 2;
+        start = 16;
     } else if ((r0 >> 24) == 0) {
-        start = 4 * 1;
+        start = 8;
     }
 
     // Kept as Kuratius' asm because GCC still leaves a little on the table here on M0+.
     for (int i = start; i <= 30; i += 2) {
-        asm volatile(
+        asm (
             ".syntax unified            \n\t"
             "movs     r4, %[i]          \n\t"
             "movs     r3, %[r1]         \n\t"
@@ -65,8 +68,10 @@ uint32_t isqrt32(uint32_t x) {
             : "cc", "r3", "r4"
         );
     }
-
-    return r1 & 0x3fffffffu;
+    //the compiler will use the uxth instruction for us here
+    //since we set the return value as uint16_t
+    //no extra cast since gcc's cost model is wrong
+    return r1;
 #else
     return isqrt_cpp_impl(x);
 #endif
